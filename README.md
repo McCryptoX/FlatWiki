@@ -50,7 +50,40 @@ npm start
 
 ### Option B: Docker
 
-Voraussetzungen: Docker Desktop
+Voraussetzungen: Docker Engine + Compose + Buildx
+
+```bash
+cp config.env.example config.env
+docker compose up -d --build
+```
+
+Hinweis: `HOST=0.0.0.0` in `config.env` belassen (Standard in `config.env.example`).
+
+### Docker auf Ubuntu installieren (inkl. Buildx)
+
+Wenn `docker-buildx-plugin` in den Standard-Ubuntu-Repos fehlt, nutze das offizielle Docker-Repository:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo ${UBUNTU_CODENAME:-$VERSION_CODENAME}) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+docker buildx version
+docker compose version
+```
+
+Optional (ohne `sudo` für Docker-Kommandos):
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+```
+
+Danach FlatWiki starten:
 
 ```bash
 cp config.env.example config.env
@@ -73,12 +106,24 @@ Aufruf:
 
 - [http://127.0.0.1:3000](http://127.0.0.1:3000)
 
+### Docker-Fehlerbehebung
+
+- Fehler `fork/exec ... docker-buildx: exec format error`: Es liegt oft ein falsches manuelles Plugin unter `~/.docker/cli-plugins/docker-buildx`.
+- `docker compose pull` ist hier nicht erforderlich, da lokal gebaut wird. Nutze `docker compose up -d --build`.
+- Fix:
+
+```bash
+rm -f ~/.docker/cli-plugins/docker-buildx
+sudo apt-get install --reinstall -y docker-buildx-plugin
+docker buildx version
+docker compose up -d --build
+```
+
 ## Wichtige Hinweise
 
-- Bei Docker muss in `config.env` `HOST=0.0.0.0` gesetzt sein.
 - `BOOTSTRAP_ADMIN_PASSWORD` wird nur beim Erststart genutzt (wenn `data/users.json` leer ist).
 - `PASSWORD_PEPPER` nach dem ersten produktiven Start nicht mehr ändern, sonst funktionieren bestehende Passwörter nicht mehr.
-- `config.env` nie ins Repository committen.
+- Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
 
 ## Erstes Admin-Konto
 
@@ -97,6 +142,8 @@ Wenn das Login nicht mehr funktioniert, kannst du das Admin-Passwort direkt neu 
 
 ```bash
 cd /pfad/zu/FlatWiki
+# Diese Variable wird in der nächsten Zeile als $NEW_ADMIN_PASSWORD verwendet.
+# Nur normale ASCII-Anführungszeichen verwenden: '...'
 NEW_ADMIN_PASSWORD='DeinSicheresPasswort123!'
 docker compose exec -T -e NEW_ADMIN_PASSWORD="$NEW_ADMIN_PASSWORD" flatwiki node - <<'NODE'
 const fs = require('fs');
