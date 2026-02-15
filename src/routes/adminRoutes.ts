@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import { createReadStream } from "node:fs";
+import path from "node:path";
 import { requireAdmin, verifySessionCsrfToken } from "../lib/auth.js";
 import { writeAuditLog } from "../lib/audit.js";
 import { config } from "../config.js";
@@ -25,6 +27,7 @@ import {
   normalizeUploadFileName
 } from "../lib/mediaStore.js";
 import { cleanupAllPageVersions, getVersionStoreReport } from "../lib/pageVersionStore.js";
+import { deleteBackupFile, getBackupStatus, listBackupFiles, resolveBackupFilePath, startBackupJob } from "../lib/backupStore.js";
 import { escapeHtml, formatDate, renderLayout } from "../lib/render.js";
 import {
   createUser,
@@ -524,6 +527,106 @@ const renderVersionManagement = (
   `;
 };
 
+const renderBackupManagement = (
+  csrfToken: string,
+  status: ReturnType<typeof getBackupStatus>,
+  files: Awaited<ReturnType<typeof listBackupFiles>>,
+  hasBackupKey: boolean
+): string => {
+  const percent = Number.isFinite(status.percent) ? Math.min(Math.max(status.percent, 0), 100) : 0;
+  const statusError = status.error ? escapeHtml(status.error) : "";
+  const stateLabel =
+    status.phase === "error"
+      ? "Fehler"
+      : status.running
+        ? "Läuft"
+        : status.phase === "done"
+          ? "Fertig"
+          : "Bereit";
+
+  const latestFiles = files
+    .slice(0, 50)
+    .map(
+      (file) => `
+        <tr>
+          <td><code>${escapeHtml(file.fileName)}</code></td>
+          <td>${escapeHtml(formatDate(file.modifiedAt))}</td>
+          <td>${escapeHtml(formatFileSize(file.sizeBytes))}</td>
+          <td>${file.hasChecksum ? "ja" : "nein"}</td>
+          <td>
+            <div class="action-row">
+              <a class="button tiny secondary" href="/admin/backups/download/${encodeURIComponent(file.fileName)}">Download</a>
+              <form method="post" action="/admin/backups/delete" onsubmit="return confirm('Backup-Datei wirklich löschen?')">
+                <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
+                <input type="hidden" name="fileName" value="${escapeHtml(file.fileName)}" />
+                <button type="submit" class="danger tiny" ${status.running ? "disabled" : ""}>Löschen</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+
+  return `
+    <section class="content-wrap stack large admin-backup-shell" data-backup-admin data-csrf="${escapeHtml(csrfToken)}">
+      <div class="admin-index-panel">
+        <h2>Backup starten</h2>
+        <p class="muted-note">Erstellt ein verschlüsseltes Daten-Backup inkl. Prüfsumme im Ordner <code>data/backups</code>.</p>
+        ${
+          hasBackupKey
+            ? '<p class="muted-note">Schlüsselstatus: <strong>BACKUP_ENCRYPTION_KEY aktiv</strong>.</p>'
+            : '<p class="muted-note">Schlüsselstatus: <strong>BACKUP_ENCRYPTION_KEY fehlt</strong>. Bitte in <code>config.env</code> setzen und Dienst neu starten.</p>'
+        }
+        <div class="action-row">
+          <button type="button" data-backup-start ${status.running || !hasBackupKey ? "disabled" : ""}>Backup jetzt erstellen</button>
+        </div>
+
+        <div class="admin-index-progress">
+          <div class="admin-index-progress-head">
+            <strong data-backup-state>${escapeHtml(stateLabel)}</strong>
+            <span data-backup-percent>${percent}%</span>
+          </div>
+          <progress value="${percent}" max="100" data-backup-progress></progress>
+          <p class="muted-note" data-backup-message>${escapeHtml(status.message)}</p>
+          <p class="muted-note" data-backup-time>
+            Start: ${status.startedAt ? escapeHtml(formatDate(status.startedAt)) : "-"} |
+            Ende: ${status.finishedAt ? escapeHtml(formatDate(status.finishedAt)) : "-"}
+          </p>
+          <p class="muted-note" data-backup-target>
+            Datei: ${status.archiveFileName ? `<code>${escapeHtml(status.archiveFileName)}</code>` : "-"}
+          </p>
+          <p class="admin-index-error" data-backup-error ${statusError ? "" : "hidden"}>${statusError}</p>
+        </div>
+      </div>
+
+      <div class="admin-index-panel">
+        <h2>Vorhandene Backups</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Datei</th>
+                <th>Erstellt</th>
+                <th>Größe</th>
+                <th>Checksum</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody data-backup-files>
+              ${
+                latestFiles.length > 0
+                  ? latestFiles
+                  : '<tr><td colspan="5" class="muted-note">Noch keine Backup-Dateien vorhanden.</td></tr>'
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  `;
+};
+
 const renderBrokenLinksPanel = (items: Awaited<ReturnType<typeof listBrokenInternalLinks>>): string => {
   if (items.length < 1) {
     return '<section class="content-wrap"><p class="empty">Keine defekten internen Wiki-Links gefunden.</p></section>';
@@ -570,7 +673,7 @@ const renderBrokenLinksPanel = (items: Awaited<ReturnType<typeof listBrokenInter
   `;
 };
 
-type AdminNavKey = "users" | "media" | "categories" | "groups" | "versions" | "links" | "index";
+type AdminNavKey = "users" | "media" | "categories" | "groups" | "versions" | "backups" | "links" | "index";
 
 const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> = [
   { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
@@ -578,6 +681,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> 
   { key: "categories", href: "/admin/categories", label: "Kategorien" },
   { key: "groups", href: "/admin/groups", label: "Gruppen" },
   { key: "versions", href: "/admin/versions", label: "Versionen" },
+  { key: "backups", href: "/admin/backups", label: "Backups" },
   { key: "links", href: "/admin/links", label: "Link-Check" },
   { key: "index", href: "/admin/index", label: "Suchindex" }
 ];
@@ -1106,6 +1210,113 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     }
 
     return reply.redirect(`/admin/versions?${params.toString()}`);
+  });
+
+  app.get("/admin/backups", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const status = getBackupStatus();
+    const files = await listBackupFiles();
+    const hasBackupKey = Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim());
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Backups",
+        description: "Verschlüsselte Datensicherungen erstellen und verwalten.",
+        active: "backups"
+      })}
+      ${renderBackupManagement(request.csrfToken ?? "", status, files, hasBackupKey)}
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Backups",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error,
+        scripts: ["/admin-backups.js?v=1"]
+      })
+    );
+  });
+
+  app.post("/admin/backups/delete", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const status = getBackupStatus();
+    if (status.running) {
+      return reply.redirect("/admin/backups?error=Backup+l%C3%A4uft+bereits.+Bitte+warten.");
+    }
+
+    const deleted = await deleteBackupFile(body.fileName ?? "");
+    if (!deleted) {
+      return reply.redirect("/admin/backups?error=Backup-Datei+nicht+gefunden+oder+ung%C3%BCltig.");
+    }
+
+    await writeAuditLog({
+      action: "admin_backup_deleted",
+      actorId: request.currentUser?.id,
+      targetId: body.fileName ?? ""
+    });
+
+    return reply.redirect("/admin/backups?notice=Backup+gel%C3%B6scht.");
+  });
+
+  app.get("/admin/backups/download/:fileName", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const params = request.params as { fileName: string };
+    const fullPath = await resolveBackupFilePath(params.fileName);
+    if (!fullPath) {
+      return reply.redirect("/admin/backups?error=Backup-Datei+nicht+gefunden.");
+    }
+
+    const safeName = path.basename(fullPath);
+    reply.header("Content-Type", "application/octet-stream");
+    reply.header("Content-Disposition", `attachment; filename=\"${safeName}\"`);
+    return reply.send(createReadStream(fullPath));
+  });
+
+  app.get("/admin/api/backups/status", { preHandler: [requireAdmin] }, async (_request, reply) => {
+    const files = await listBackupFiles();
+    const hasBackupKey = Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim());
+    return reply.send({
+      ok: true,
+      status: getBackupStatus(),
+      files,
+      hasBackupKey
+    });
+  });
+
+  app.post("/admin/api/backups/start", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).send({
+        ok: false,
+        error: "Ungültiges CSRF-Token"
+      });
+    }
+
+    const result = startBackupJob();
+
+    if (result.started) {
+      await writeAuditLog({
+        action: "admin_backup_started",
+        actorId: request.currentUser?.id
+      });
+    }
+
+    const files = await listBackupFiles();
+
+    return reply.send({
+      ok: result.started,
+      started: result.started,
+      reason: result.reason,
+      status: result.status,
+      hasBackupKey: Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim()),
+      files
+    });
   });
 
   app.get("/admin/links", { preHandler: [requireAdmin] }, async (request, reply) => {

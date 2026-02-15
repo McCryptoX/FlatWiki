@@ -32,6 +32,7 @@ const bootstrapDataStorage = async (): Promise<void> => {
   await ensureDir(config.wikiDir);
   await ensureDir(config.uploadDir);
   await ensureDir(config.versionsDir);
+  await ensureDir(config.backupDir);
   await ensureFile(config.categoriesFile, "[]\n");
   await ensureFile(config.groupsFile, "[]\n");
   await ensureFile(config.usersFile, "[]\n");

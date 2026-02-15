@@ -56,6 +56,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - Manuelle Bereinigung (Retention + Kompression)
 - Beim Löschen eines Artikels: automatische Entfernung nicht mehr referenzierter Upload-Bilder
 - Verschlüsselte Backups mit separatem Backup-Schlüssel (`scripts/backup-encrypted.sh`, `scripts/backup-decrypt.sh`)
+- Admin-Backupverwaltung (`/admin/backups`) mit 1-Klick-Start, Progressbar, Download und Löschen
 - Admin-Kategorienverwaltung (`/admin/categories`)
 - Admin-Gruppenverwaltung (`/admin/groups`)
 - Visueller Setup-Assistent beim ersten Start (`/setup`)
@@ -188,6 +189,7 @@ docker compose up -d --build
 - Kryptoschlüssel werden nicht separat im `data/`-Ordner persistiert. Quelle ist ausschließlich `config.env`.
 - `CONTENT_ENCRYPTION_KEY` nach produktivem Start nicht mehr ändern, sonst können bestehende verschlüsselte Artikel nicht mehr gelesen werden.
 - `CONTENT_INTEGRITY_KEY` nach produktivem Start nicht mehr ändern, sonst schlagen Integritätsprüfungen signierter Artikel fehl.
+- `BACKUP_ENCRYPTION_KEY` nach produktivem Start nicht leichtfertig ändern, sonst sind ältere Backups u.U. nicht mehr entschlüsselbar.
 - `VERSION_HISTORY_RETENTION` bestimmt, wie viele Versionen pro Artikel behalten werden.
 - `VERSION_HISTORY_COMPRESS_AFTER` bestimmt, ab welcher Position ältere Versionen komprimiert werden.
 - Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
@@ -255,6 +257,7 @@ Pflicht in Produktion:
 
 - `COOKIE_SECRET` (langes zufälliges Secret)
 - `CONTENT_INTEGRITY_KEY` (64 Hex, wird für Erstellen/Bearbeiten von Artikeln benötigt)
+- `BACKUP_ENCRYPTION_KEY` (Secret für verschlüsselte Backups, getrennt vom Content-Key)
 
 Optional:
 
