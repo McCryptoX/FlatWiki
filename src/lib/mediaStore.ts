@@ -59,10 +59,18 @@ export const normalizeUploadFileName = (rawName: string): string | null => {
   return segments.join("/");
 };
 
+const stripMarkdownCodeForUploadScan = (markdown: string): string =>
+  markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/^(?: {4}|\t).+$/gm, " ");
+
 export const extractUploadReferencesFromMarkdown = (markdown: string): string[] => {
   const refs = new Set<string>();
+  const scanSource = stripMarkdownCodeForUploadScan(markdown);
 
-  for (const match of markdown.matchAll(UPLOAD_REFERENCE_PATTERN)) {
+  for (const match of scanSource.matchAll(UPLOAD_REFERENCE_PATTERN)) {
     const rawFileName = match[1];
     if (!rawFileName) continue;
 

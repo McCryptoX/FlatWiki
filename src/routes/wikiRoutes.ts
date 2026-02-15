@@ -10,6 +10,7 @@ import { config } from "../config.js";
 import { ensureDir } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
+import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
 import { listUsers } from "../lib/userStore.js";
 import {
   canUserAccessPage,
@@ -228,6 +229,7 @@ const renderEditorForm = (params: {
   mode: "new" | "edit";
   action: string;
   slug: string;
+  slugAuto?: boolean;
   title: string;
   tags: string;
   content: string;
@@ -247,10 +249,20 @@ const renderEditorForm = (params: {
       <form method="post" action="${escapeHtml(params.action)}" class="stack large">
         <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
         <label>Titel
-          <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" />
+          <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" data-title-input />
         </label>
-        <label>Slug
-          <input type="text" name="slug" value="${escapeHtml(params.slug)}" ${params.slugLocked ? "readonly" : ""} required pattern="[a-z0-9-]{1,80}" />
+        <label>Seitenadresse (URL)
+          <input
+            type="text"
+            name="slug"
+            value="${escapeHtml(params.slug)}"
+            ${params.slugLocked ? "readonly" : ""}
+            pattern="[a-z0-9-]{1,80}"
+            placeholder="Wird automatisch aus dem Titel erstellt"
+            data-slug-input
+            data-slug-auto="${params.slugAuto === false ? "0" : "1"}"
+          />
+          <span class="muted-note small">Adresse der Seite in der URL. Kann leer bleiben und wird automatisch erstellt.</span>
         </label>
         <label>Kategorie
           <select name="categoryId" required>
@@ -571,6 +583,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       mode: "new",
       action: "/new",
       slug: draftSlug,
+      slugAuto: readSingle(query.slug).trim().length === 0,
       title: draftTitle,
       tags: draftTags,
       content: draftContent,
@@ -630,7 +643,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
     if (!isValidSlug(slug)) {
       const query = buildEditorRedirectQuery({
-        error: "Ungültiger Slug",
+        error: "Ungültige Seitenadresse",
         title,
         slug,
         tags: tagsRaw,
@@ -646,7 +659,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const existing = await getPage(slug);
     if (existing) {
       const query = buildEditorRedirectQuery({
-        error: "Slug existiert bereits",
+        error: "Seitenadresse existiert bereits",
         title,
         slug,
         tags: tagsRaw,
@@ -684,6 +697,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         encrypted
       });
       return reply.redirect(`/new?${query}`);
+    }
+
+    const createIndexResult = await upsertSearchIndexBySlug(slug);
+    if (!createIndexResult.updated && createIndexResult.reason && createIndexResult.reason !== "rebuild_running") {
+      request.log.warn({ slug, reason: createIndexResult.reason }, "Konnte Suchindex für neue Seite nicht inkrementell aktualisieren");
     }
 
     await writeAuditLog({
@@ -733,6 +751,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       mode: "edit",
       action: `/wiki/${encodeURIComponent(page.slug)}/edit`,
       slug: page.slug,
+      slugAuto: false,
       title,
       tags,
       content,
@@ -930,6 +949,14 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       return reply.redirect(`/wiki/${encodeURIComponent(params.slug)}/edit?${query}`);
     }
 
+    const updateIndexResult = await upsertSearchIndexBySlug(params.slug);
+    if (!updateIndexResult.updated && updateIndexResult.reason && updateIndexResult.reason !== "rebuild_running") {
+      request.log.warn(
+        { slug: params.slug, reason: updateIndexResult.reason },
+        "Konnte Suchindex für bearbeitete Seite nicht inkrementell aktualisieren"
+      );
+    }
+
     await writeAuditLog({
       action: "wiki_page_updated",
       actorId: request.currentUser?.id,
@@ -956,6 +983,14 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const deleted = await deletePage(params.slug);
     if (!deleted) {
       return reply.redirect("/?error=Seite+nicht+gefunden");
+    }
+
+    const deleteIndexResult = await removeSearchIndexBySlug(params.slug);
+    if (!deleteIndexResult.updated && deleteIndexResult.reason && deleteIndexResult.reason !== "index_missing") {
+      request.log.warn(
+        { slug: params.slug, reason: deleteIndexResult.reason },
+        "Konnte Suchindex-Eintrag nach Löschung nicht inkrementell entfernen"
+      );
     }
 
     let removedUploadsCount = 0;

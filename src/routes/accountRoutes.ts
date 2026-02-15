@@ -187,7 +187,7 @@ export const registerAccountRoutes = async (app: FastifyInstance): Promise<void>
       storageDump: {
         format: "markdown",
         files: myArticles.map((article) => ({
-          path: `data/wiki/${article.slug}.md`,
+          path: article.storagePath,
           markdown: article.markdown
         }))
       }

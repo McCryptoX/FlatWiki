@@ -7,7 +7,7 @@ import sanitizeHtml from "sanitize-html";
 import { config } from "../config.js";
 import type { PublicUser, WikiHeading, WikiPage, WikiPageSummary, WikiVisibility } from "../types.js";
 import { findCategoryById, getDefaultCategory, listCategories } from "./categoryStore.js";
-import { ensureDir, listFiles, readJsonFile, readTextFile, removeFile, writeTextFile } from "./fileStore.js";
+import { ensureDir, readJsonFile, readTextFile, removeFile, writeTextFile } from "./fileStore.js";
 
 marked.use({
   gfm: true,
@@ -161,30 +161,82 @@ const normalizeAllowedUsers = (value: unknown): string[] => {
   return result;
 };
 
-const resolvePagePath = (slug: string): string => path.join(config.wikiDir, `${slug}.md`);
+const getWikiShard = (slug: string): string => slug.slice(0, 2).replace(/[^a-z0-9]/g, "_").padEnd(2, "_");
 
-const resolveExistingPagePath = async (slug: string): Promise<string | null> => {
-  const normalizedSlug = slug.trim().toLowerCase();
-  if (!SLUG_PATTERN.test(normalizedSlug)) return null;
+const resolveLegacyPagePath = (slug: string): string => path.join(config.wikiDir, `${slug}.md`);
 
-  const exact = resolvePagePath(normalizedSlug);
-  try {
-    await fs.access(exact);
-    return exact;
-  } catch {
-    // fallback for legacy mixed-case files
-  }
+const resolvePagePath = (slug: string): string => path.join(config.wikiDir, getWikiShard(slug), `${slug}.md`);
 
-  const files = await listFiles(config.wikiDir);
-  for (const filePath of files) {
-    if (!filePath.endsWith(".md")) continue;
-    const base = path.basename(filePath, ".md");
-    if (base.toLowerCase() === normalizedSlug) {
-      return filePath;
+const listMarkdownFilesRecursive = async (rootDir: string): Promise<string[]> => {
+  const files: string[] = [];
+  const queue = [rootDir];
+
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (!current) continue;
+
+    let entries: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>;
+    try {
+      entries = (await fs.readdir(current, {
+        withFileTypes: true,
+        encoding: "utf8"
+      })) as Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>;
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      files.push(fullPath);
     }
   }
 
-  return null;
+  return files;
+};
+
+const resolveAllPagePaths = async (slug: string): Promise<string[]> => {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!SLUG_PATTERN.test(normalizedSlug)) return [];
+
+  const seen = new Set<string>();
+  const matches: string[] = [];
+  const addIfExists = async (filePath: string): Promise<void> => {
+    const normalized = path.normalize(filePath);
+    if (seen.has(normalized)) return;
+    try {
+      await fs.access(filePath);
+      seen.add(normalized);
+      matches.push(filePath);
+    } catch {
+      // noop
+    }
+  };
+
+  await addIfExists(resolvePagePath(normalizedSlug));
+  await addIfExists(resolveLegacyPagePath(normalizedSlug));
+
+  const files = await listMarkdownFilesRecursive(config.wikiDir);
+  for (const filePath of files) {
+    const base = path.basename(filePath, ".md");
+    if (base.toLowerCase() !== normalizedSlug) continue;
+    const normalized = path.normalize(filePath);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    matches.push(filePath);
+  }
+
+  return matches;
+};
+
+const resolveExistingPagePath = async (slug: string): Promise<string | null> => {
+  const matches = await resolveAllPagePaths(slug);
+  return matches[0] ?? null;
 };
 
 const encryptContent = (plaintext: string): EncryptedPayload | null => {
@@ -242,7 +294,7 @@ const resolveCategoryMeta = async (categoryId: string): Promise<{ id: string; na
   };
 };
 
-const parseMarkdownPageFromPath = async (slug: string, filePath: string): Promise<WikiPage | null> => {
+const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbackTimestamp: string): Promise<WikiPage | null> => {
   const source = await readTextFile(filePath);
   if (!source) return null;
 
@@ -256,8 +308,8 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string): Promis
   const title = String(data.title ?? slug).trim() || slug;
   const tags = normalizeTags(data.tags);
   const createdBy = String(data.createdBy ?? data.updatedBy ?? "unknown");
-  const createdAt = String(data.createdAt ?? data.updatedAt ?? new Date().toISOString());
-  const updatedAt = String(data.updatedAt ?? createdAt);
+  const createdAt = String(data.createdAt ?? data.updatedAt ?? fallbackTimestamp);
+  const updatedAt = String(data.updatedAt ?? data.createdAt ?? fallbackTimestamp);
   const updatedBy = String(data.updatedBy ?? "unknown");
 
   const encryptedByMeta = data.encrypted === true;
@@ -389,7 +441,7 @@ const getPageFromPathWithCache = async (slug: string, filePath: string): Promise
     return clonePage(cached.page);
   }
 
-  const parsed = await parseMarkdownPageFromPath(slug, filePath);
+  const parsed = await parseMarkdownPageFromPath(slug, filePath, stats.mtime.toISOString());
   if (!parsed) {
     pageRenderCache.delete(slug);
     return null;
@@ -413,18 +465,31 @@ export const listPages = async (options?: { categoryId?: string; forceFileScan?:
   }
 
   await ensureDir(config.wikiDir);
-  const files = await listFiles(config.wikiDir);
-  const markdownFiles = files.filter((filePath) => filePath.endsWith(".md"));
+  const markdownFiles = await listMarkdownFilesRecursive(config.wikiDir);
 
-  const seen = new Set<string>();
-  const pages: WikiPageSummary[] = [];
+  const candidateBySlug = new Map<string, { filePath: string; score: number }>();
+  const scoreCandidate = (slug: string, filePath: string): number => {
+    const normalizedPath = path.normalize(filePath);
+    if (normalizedPath === path.normalize(resolvePagePath(slug))) return 3;
+    if (normalizedPath === path.normalize(resolveLegacyPagePath(slug))) return 2;
+    return 1;
+  };
 
   for (const filePath of markdownFiles) {
     const slug = path.basename(filePath, ".md").toLowerCase();
-    if (!isValidSlug(slug) || seen.has(slug)) continue;
-    seen.add(slug);
+    if (!isValidSlug(slug)) continue;
 
-    const page = await getPageFromPathWithCache(slug, filePath);
+    const score = scoreCandidate(slug, filePath);
+    const current = candidateBySlug.get(slug);
+    if (!current || score > current.score || (score === current.score && filePath.localeCompare(current.filePath) < 0)) {
+      candidateBySlug.set(slug, { filePath, score });
+    }
+  }
+
+  const pages: WikiPageSummary[] = [];
+
+  for (const [slug, candidate] of candidateBySlug.entries()) {
+    const page = await getPageFromPathWithCache(slug, candidate.filePath);
     if (!page) continue;
     if (options?.categoryId && page.categoryId !== options.categoryId) continue;
     pages.push(toSummary(page));
@@ -578,6 +643,8 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   }
 
   await ensureDir(config.wikiDir);
+  const existingPaths = await resolveAllPagePaths(slug);
+  const targetPath = resolvePagePath(slug);
   const existingPage = await getPage(slug);
 
   const category = (await findCategoryById(input.categoryId ?? "")) ?? (await getDefaultCategory());
@@ -629,7 +696,13 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   }
 
   const frontmatter = matter.stringify(markdownBody, frontmatterData);
-  await writeTextFile(resolvePagePath(slug), frontmatter.endsWith("\n") ? frontmatter : `${frontmatter}\n`);
+  await writeTextFile(targetPath, frontmatter.endsWith("\n") ? frontmatter : `${frontmatter}\n`);
+
+  const normalizedTarget = path.normalize(targetPath);
+  for (const existingPath of existingPaths) {
+    if (path.normalize(existingPath) === normalizedTarget) continue;
+    await removeFile(existingPath);
+  }
 
   lastWikiMutationAtMs = Date.now();
   pageRenderCache.delete(slug);
@@ -642,12 +715,14 @@ export const deletePage = async (slug: string): Promise<boolean> => {
   const normalizedSlug = slug.trim().toLowerCase();
   if (!isValidSlug(normalizedSlug)) return false;
 
-  const pagePath = await resolveExistingPagePath(normalizedSlug);
-  if (!pagePath) {
+  const pagePaths = await resolveAllPagePaths(normalizedSlug);
+  if (pagePaths.length < 1) {
     return false;
   }
 
-  await removeFile(pagePath);
+  for (const pagePath of pagePaths) {
+    await removeFile(pagePath);
+  }
   lastWikiMutationAtMs = Date.now();
   pageRenderCache.delete(normalizedSlug);
   suggestionIndexDirty = true;
@@ -793,6 +868,7 @@ export interface UserArticleSummary {
 }
 
 export interface UserArticleExportItem extends UserArticleSummary {
+  storagePath: string;
   markdown: string;
 }
 
@@ -826,19 +902,28 @@ export const exportPagesCreatedByUser = async (username: string): Promise<UserAr
     })
   );
 
-  return expanded
+  const authored = expanded
     .filter((page): page is WikiPage => page !== null)
-    .filter((page) => isPageCreatedByUser(page, username))
-    .map((page) => ({
+    .filter((page) => isPageCreatedByUser(page, username));
+
+  const result: UserArticleExportItem[] = [];
+  for (const page of authored) {
+    const storageAbsolutePath = (await resolveExistingPagePath(page.slug)) ?? resolvePagePath(page.slug);
+    const storagePath = path.relative(config.rootDir, storageAbsolutePath).replace(/\\/g, "/");
+
+    result.push({
       slug: page.slug,
       title: page.title,
       tags: page.tags,
       createdAt: page.createdAt,
       updatedAt: page.updatedAt,
       updatedBy: page.updatedBy,
+      storagePath,
       markdown: page.content
-    }))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    });
+  }
+
+  return result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 };
 
 export const listKnownCategories = async (): Promise<Array<{ id: string; name: string }>> => {

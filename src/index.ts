@@ -10,6 +10,7 @@ import { config } from "./config.js";
 import { attachCurrentUser } from "./lib/auth.js";
 import { ensureDefaultCategory } from "./lib/categoryStore.js";
 import { ensureDir, ensureFile } from "./lib/fileStore.js";
+import { ensureSearchIndexConsistency } from "./lib/searchIndexStore.js";
 import { purgeExpiredSessions } from "./lib/sessionStore.js";
 import { ensureInitialAdmin } from "./lib/userStore.js";
 import { registerAccountRoutes } from "./routes/accountRoutes.js";
@@ -103,6 +104,12 @@ const start = async (): Promise<void> => {
   try {
     await bootstrapDataStorage();
     await ensureDefaultCategory();
+    const indexCheck = await ensureSearchIndexConsistency();
+    if (indexCheck.rebuilt) {
+      app.log.info({ reason: indexCheck.reason }, "Suchindex wurde beim Start automatisch neu aufgebaut.");
+    } else {
+      app.log.info({ reason: indexCheck.reason }, "Suchindex-Konsistenz beim Start geprüft.");
+    }
     await registerPlugins();
 
     app.addHook("preHandler", attachCurrentUser);
