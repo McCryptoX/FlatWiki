@@ -6,40 +6,45 @@ tags:
   - admin
   - benutzer
 createdAt: 2026-02-14T13:30:00.000Z
-updatedAt: 2026-02-14T13:30:00.000Z
+updatedAt: 2026-02-15T17:05:00.000Z
 updatedBy: system
 ---
 
 # FlatWiki - Komplette Nutzung
 
-Diese Seite ist eine vollständige Demo-Anleitung für Benutzer und Admins.
+Diese Seite ist eine vollstaendige Anleitung fuer Benutzer und Admins.
 
 ## 1. Login und Startseite
 
 1. Rufe die Login-Seite auf (`/login`).
 2. Melde dich mit Benutzername und Passwort an.
-3. Nach dem Login landest du auf der Wiki-Übersicht.
+3. Nach dem Login landest du auf der Wiki-Uebersicht.
 
-Auf der Startseite siehst du:
+Auf der Startseite findest du:
 
-- alle vorhandenen Wiki-Seiten
-- den Suchbereich
+- die Uebersicht aller Wiki-Seiten
+- die Suche mit Live-Vorschlaegen
 - den Button **Neue Seite**
-- die Navigation zu **Konto** und (für Admins) **Admin**
+- die Navigation zu **Konto** und (fuer Admins) **Admin**
+- Vollstaendige Anleitung: [FlatWiki - Komplette Nutzung](/wiki/flatwiki-komplette-nutzung)
+- Formatierungsleitfaden: [Markdown-Formatierung HowTo](/wiki/markdown-formatierung-howto)
 
 ## 2. Wiki-Seiten lesen
 
-1. Klicke auf eine Seite in der Übersicht.
+1. Klicke auf eine Seite in der Uebersicht.
 2. Die Seite wird gerendert (Markdown -> HTML) angezeigt.
-3. Bilder, Listen, Code-Blöcke und Überschriften werden unterstützt.
+3. Bilder, Listen, Code-Bloecke und Ueberschriften werden unterstuetzt.
+4. Ab `##` wird automatisch die linke Artikel-Navigation aufgebaut.
 
 ## 3. Neue Seite erstellen
 
 1. Klicke auf **Neue Seite**.
-2. Fülle folgende Felder aus:
+2. Fuelle folgende Felder aus:
 
 - **Titel**: sichtbarer Seitentitel
-- **Slug**: URL-Name, z. B. `betriebshandbuch`
+- **Seitenadresse (URL-Pfad)**: z. B. `betriebshandbuch`
+- **Kategorie**: z. B. `Allgemein`
+- **Zugriff**: alle Benutzer oder nur freigegebene Benutzer/Gruppen
 - **Tags**: kommagetrennt, z. B. `intern,prozess`
 - **Inhalt (Markdown)**: eigentlicher Text
 
@@ -47,44 +52,60 @@ Auf der Startseite siehst du:
 
 Hinweise:
 
-- Slug darf nur `a-z`, `0-9` und `-` enthalten.
-- Besteht der Slug bereits, wird die Seite nicht überschrieben.
+- Die **Seitenadresse** wird beim Tippen des Titels automatisch erstellt.
+- Erlaubt sind `a-z`, `0-9` und `-`.
+- Existiert die Seitenadresse bereits, zeigt FlatWiki eine Fehlermeldung.
 
 ## 4. Seite bearbeiten
 
-1. Öffne eine Wiki-Seite.
+1. Oeffne eine Wiki-Seite.
 2. Klicke auf **Bearbeiten**.
-3. Ändere Titel, Tags oder Inhalt.
-4. Speichere mit **Änderungen speichern**.
+3. Aendere Titel, Tags oder Inhalt.
+4. Speichere mit **Aenderungen speichern**.
+5. Jede Aenderung erzeugt einen Historieneintrag.
 
-## 5. Seite löschen (nur Admin)
+## 5. Seite loeschen (nur Admin)
 
-1. Öffne die gewünschte Seite.
-2. Klicke auf **Löschen**.
-3. Bestätige den Dialog.
+1. Oeffne die gewuenschte Seite.
+2. Klicke auf **Loeschen**.
+3. Bestaetige den Dialog.
 
-Nur Benutzer mit Rolle `admin` dürfen Seiten löschen.
+Nur Benutzer mit Rolle `admin` duerfen Seiten loeschen.
 
 ## 6. Suche nutzen
 
 1. Gib oben im Suchfeld einen Begriff ein.
-2. Klicke auf **Suchen**.
-3. FlatWiki durchsucht:
+2. Waehrend der Eingabe erscheinen Live-Vorschlaege.
+3. Klicke auf **Suchen** oder bestaetige mit Enter.
+4. FlatWiki durchsucht:
 
 - Titel
 - Tags
 - Seiteninhalt
-- Auszüge aus Markdown-Text
+- Auszuege aus Markdown-Text
 
-## 7. Mein Konto
+## 7. Interne Links und Backlinks
+
+FlatWiki unterstuetzt interne Wiki-Links:
+
+- `[[Seitenname]]`
+- `[[Seitenname|Eigener Linktext]]`
+
+Zusaetzlich:
+
+- Unter jedem Artikel siehst du den Bereich **Verlinkt von** (Backlinks).
+- Defekte interne Links kann ein Admin unter **Admin -> Link-Check** pruefen.
+- Dort kann direkt eine fehlende Zielseite angelegt werden.
+
+## 8. Mein Konto
 
 Unter **Konto** kannst du:
 
 - deine Kontodaten einsehen
-- dein Passwort ändern
+- dein Passwort aendern
 - deine Daten als JSON exportieren
 
-### Passwort ändern
+### Passwort aendern
 
 1. Altes Passwort eingeben.
 2. Neues Passwort zweimal eingeben.
@@ -92,35 +113,70 @@ Unter **Konto** kannst du:
 
 Danach werden aktive Sessions beendet und du meldest dich neu an.
 
-## 8. Admin-Bereich: Benutzerverwaltung
+## 9. Bilder im Artikel
 
-Unter **Admin** -> **Benutzerverwaltung** kann ein Admin:
+Im Editor kannst du Bilder direkt hochladen:
 
-- neue Benutzer anlegen
-- Rollen ändern (`user`/`admin`)
-- Benutzer deaktivieren
-- Passwörter zurücksetzen
-- Benutzer löschen
+1. Datei auswaehlen (auch mehrere Dateien auf einmal).
+2. Upload starten.
+3. Den erzeugten Markdown-Block direkt in den Artikel uebernehmen.
 
-Sicherheitsregeln:
+Hinweise:
 
-- ein Admin kann sein eigenes Konto nicht löschen
-- es muss mindestens ein aktiver Admin übrig bleiben
+- Dateinamen werden automatisch sicher umbenannt.
+- Uploads liegen je Kategorie in eigenen Ordnern.
+- Nicht mehr verwendete Bilder koennen im Admin-Bereich bereinigt werden.
 
-## 9. Dateibasiertes Datenmodell
+## 10. Admin-Bereich
 
-FlatWiki speichert Daten ohne SQL-Datenbank:
+Wichtige Admin-Seiten:
 
-- `data/wiki/*.md` -> Wiki-Seiten
+- **Benutzerverwaltung**: Benutzer anlegen, aendern, deaktivieren, loeschen
+- **Bildverwaltung**: Einbindungen pruefen, ungenutzte Bilder loeschen
+- **Kategorien**: Kategorien anlegen und umbenennen
+- **Gruppen**: Benutzergruppen fuer Freigaben verwalten
+- **Versionen**: Historie pruefen, Bereinigung starten
+- **Link-Check**: defekte interne Links finden
+- **Suchindex**: Index-Backend waehlen und Neuaufbau starten
+
+Sicherheitsregeln in der Benutzerverwaltung:
+
+- eigenes Konto kann nicht geloescht werden
+- mindestens ein aktiver Admin muss erhalten bleiben
+
+## 11. Zugriff und Verschluesselung
+
+Pro Artikel kannst du:
+
+- den Zugriff einschraenken (nur ausgewaehlte Benutzer/Gruppen)
+- optional **Verschluesselung im Dateisystem (AES-256)** aktivieren
+
+Wichtig:
+
+- Fuer Verschluesselung muss `CONTENT_ENCRYPTION_KEY` gesetzt sein.
+- Ohne korrekten Schluessel koennen verschluesselte Seiten nicht gelesen werden.
+
+## 12. Dateibasiertes Datenmodell
+
+FlatWiki speichert ohne klassische SQL-Datenbank als primaere Quelle:
+
+- `data/wiki/*.md` -> Wiki-Seiten (Quelle der Wahrheit)
 - `data/users.json` -> Benutzerkonten
 - `data/sessions.json` -> Sessions
 - `data/audit.log` -> Audit-Ereignisse
+- `data/uploads/` -> hochgeladene Dateien
+- `data/versions/` -> Artikelhistorie
 
-## 10. Backup und Restore
+Optional kann der Suchindex im Hybrid-Modus in SQLite liegen:
+
+- `data/index/pages.sqlite` (Index)
+- `data/index/pages.json` (Fallback)
+
+## 13. Backup und Restore
 
 ### Backup
 
-Regelmäßig den Ordner `data/` sichern.
+Regelmaessig den Ordner `data/` sichern.
 
 Beispiel:
 
@@ -131,41 +187,41 @@ tar -czf flatwiki-backup-$(date +%F).tar.gz data
 ### Restore
 
 1. Dienst stoppen.
-2. `data/` aus Backup zurückspielen.
+2. `data/` aus Backup zurueckspielen.
 3. Dienst neu starten.
 
-## 11. DSGVO-orientierter Betrieb
+## 14. DSGVO-orientierter Betrieb
 
-FlatWiki enthält technische Schutzmechanismen:
+FlatWiki enthaelt technische Schutzmechanismen:
 
 - Passwort-Hashing (`scrypt`)
 - CSRF-Schutz
 - Rate-Limiting
 - Audit-Log
-- Datenexport für Benutzer
+- Datenexport fuer Benutzer
 
-Für den produktiven Betrieb zusätzlich organisatorisch klären:
+Fuer den produktiven Betrieb zusaetzlich organisatorisch klaeren:
 
 - Rechtsgrundlagen
-- Aufbewahrungs- und Löschfristen
+- Aufbewahrungs- und Loeschfristen
 - Verantwortlichkeiten
 - Impressum und finale Datenschutzhinweise
 
-## 12. Tipps für den Alltag
+## 15. Tipps fuer den Alltag
 
 - Tags konsequent verwenden (z. B. `prozess`, `faq`, `it`, `hr`).
 - Seiten kurz und thematisch getrennt halten.
-- Für Änderungen an sensiblen Inhalten Freigabeprozess definieren.
-- `data/` in Backups aufnehmen, aber niemals öffentlich veröffentlichen.
+- Fuer Aenderungen an sensiblen Inhalten Freigabeprozess definieren.
+- `data/` in Backups aufnehmen, aber niemals oeffentlich veroeffentlichen.
 
-## 13. Beispiel-Markdown
+## 16. Beispiel-Markdown
 
 ```md
 ## Team-Regel
 
-- Anfragen über das Ticket-System
+- Anfragen ueber das Ticket-System
 - Antwortzeit: 24h
-- Eskalation bei Priorität "hoch"
+- Eskalation bei Prioritaet "hoch"
 ```
 
-Damit hast du eine vollständige Referenz für die Nutzung von FlatWiki.
+Damit hast du eine vollstaendige Referenz fuer die Nutzung von FlatWiki.

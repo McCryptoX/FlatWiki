@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { requireAdmin, verifySessionCsrfToken } from "../lib/auth.js";
 import { writeAuditLog } from "../lib/audit.js";
+import { config } from "../config.js";
 import { createCategory, listCategories, renameCategory } from "../lib/categoryStore.js";
 import {
   createGroup,
@@ -23,6 +24,7 @@ import {
   getUploadUsageReport,
   normalizeUploadFileName
 } from "../lib/mediaStore.js";
+import { cleanupAllPageVersions, getVersionStoreReport } from "../lib/pageVersionStore.js";
 import { escapeHtml, formatDate, renderLayout } from "../lib/render.js";
 import {
   createUser,
@@ -36,7 +38,7 @@ import {
 import { validatePasswordStrength } from "../lib/password.js";
 import { getRuntimeSettings, setIndexBackend } from "../lib/runtimeSettingsStore.js";
 import { deleteUserSessions } from "../lib/sessionStore.js";
-import { listPages } from "../lib/wikiStore.js";
+import { listBrokenInternalLinks, listPages } from "../lib/wikiStore.js";
 
 const asRecord = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object") return {};
@@ -441,25 +443,183 @@ const renderIndexManagement = (
   `;
 };
 
+const renderVersionManagement = (
+  csrfToken: string,
+  report: Awaited<ReturnType<typeof getVersionStoreReport>>,
+  query: Record<string, string>
+): string => {
+  const defaultRetention = String(config.versionHistoryRetention);
+  const defaultCompressAfter = String(config.versionHistoryCompressAfter);
+  const retention = query.keepLatest && query.keepLatest.trim().length > 0 ? query.keepLatest.trim() : defaultRetention;
+  const compressAfter =
+    query.compressAfter && query.compressAfter.trim().length > 0 ? query.compressAfter.trim() : defaultCompressAfter;
+
+  return `
+    <section class="content-wrap stack large">
+      <div class="admin-index-panel">
+        <h2>Historie-Speicher</h2>
+        <dl class="admin-index-meta">
+          <dt>Artikel mit Historie</dt>
+          <dd>${report.totalSlugs}</dd>
+          <dt>Versionen gesamt</dt>
+          <dd>${report.totalVersions}</dd>
+          <dt>Belegter Speicher</dt>
+          <dd>${escapeHtml(formatFileSize(report.totalDiskBytes))}</dd>
+          <dt>Retention (Standard)</dt>
+          <dd>${config.versionHistoryRetention} pro Artikel</dd>
+          <dt>Kompression ab Position</dt>
+          <dd>${config.versionHistoryCompressAfter}</dd>
+        </dl>
+      </div>
+
+      <div class="admin-index-panel">
+        <h2>Bereinigung starten</h2>
+        <p class="muted-note">Ältere Versionen werden komprimiert und überzählige Stände pro Artikel entfernt.</p>
+        <form method="post" action="/admin/versions/cleanup" class="stack">
+          <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
+          <label>Versionen pro Artikel behalten
+            <input type="number" min="1" max="5000" name="keepLatest" value="${escapeHtml(retention)}" required />
+          </label>
+          <label>Ab Position komprimieren (.json.gz)
+            <input type="number" min="0" max="5000" name="compressAfter" value="${escapeHtml(compressAfter)}" required />
+          </label>
+          <button type="submit">Historie bereinigen</button>
+        </form>
+      </div>
+
+      <div class="admin-index-panel">
+        <h2>Top-Artikel nach Historie</h2>
+        ${
+          report.topItems.length < 1
+            ? '<p class="empty">Noch keine gespeicherten Versionen vorhanden.</p>'
+            : `
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Artikel</th>
+                      <th>Versionen</th>
+                      <th>Speicher</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${report.topItems
+                      .map(
+                        (item) => `
+                          <tr>
+                            <td><a href="/wiki/${encodeURIComponent(item.slug)}/history">${escapeHtml(item.slug)}</a></td>
+                            <td>${item.totalVersions}</td>
+                            <td>${escapeHtml(formatFileSize(item.diskBytes))}</td>
+                          </tr>
+                        `
+                      )
+                      .join("")}
+                  </tbody>
+                </table>
+              </div>
+            `
+        }
+      </div>
+    </section>
+  `;
+};
+
+const renderBrokenLinksPanel = (items: Awaited<ReturnType<typeof listBrokenInternalLinks>>): string => {
+  if (items.length < 1) {
+    return '<section class="content-wrap"><p class="empty">Keine defekten internen Wiki-Links gefunden.</p></section>';
+  }
+
+  return `
+    <section class="content-wrap">
+      <p>${items.length} defekte interne Verlinkung(en) gefunden.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Quellseite</th>
+              <th>Ziel (eingetragen)</th>
+              <th>Ziel-Slug</th>
+              <th>Linktext</th>
+              <th>Letzte Änderung</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items
+              .map(
+                (entry) => `
+                  <tr>
+                    <td><a href="/wiki/${encodeURIComponent(entry.sourceSlug)}">${escapeHtml(entry.sourceTitle)} (${escapeHtml(entry.sourceSlug)})</a></td>
+                    <td><code>${escapeHtml(entry.targetRaw)}</code></td>
+                    <td><code>${escapeHtml(entry.targetSlug)}</code></td>
+                    <td>${escapeHtml(entry.label)}</td>
+                    <td>${escapeHtml(formatDate(entry.sourceUpdatedAt))}</td>
+                    <td>
+                      <a class="button tiny secondary" href="/new?title=${encodeURIComponent(entry.targetRaw || entry.targetSlug)}&slug=${encodeURIComponent(
+                        entry.targetSlug
+                      )}">Zielseite anlegen</a>
+                    </td>
+                  </tr>
+                `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+};
+
+type AdminNavKey = "users" | "media" | "categories" | "groups" | "versions" | "links" | "index";
+
+const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> = [
+  { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
+  { key: "media", href: "/admin/media", label: "Bildverwaltung" },
+  { key: "categories", href: "/admin/categories", label: "Kategorien" },
+  { key: "groups", href: "/admin/groups", label: "Gruppen" },
+  { key: "versions", href: "/admin/versions", label: "Versionen" },
+  { key: "links", href: "/admin/links", label: "Link-Check" },
+  { key: "index", href: "/admin/index", label: "Suchindex" }
+];
+
+const renderAdminNav = (active: AdminNavKey): string => `
+  <nav class="action-row admin-nav" aria-label="Admin Navigation">
+    ${ADMIN_NAV_ITEMS.map((item) => {
+      const activeClass = item.key === active ? " is-active-nav" : "";
+      const ariaCurrent = item.key === active ? ' aria-current="page"' : "";
+      return `<a class="button secondary${activeClass}" href="${item.href}"${ariaCurrent}>${item.label}</a>`;
+    }).join("")}
+  </nav>
+`;
+
+const renderAdminHeader = (input: {
+  title: string;
+  description: string;
+  active: AdminNavKey;
+  actions?: string;
+}): string => `
+  <section class="page-header under-title">
+    <div>
+      <h1>${input.title}</h1>
+      <p>${input.description}</p>
+    </div>
+    ${renderAdminNav(input.active)}
+    ${input.actions ? `<div class="action-row admin-page-actions">${input.actions}</div>` : ""}
+  </section>
+`;
+
 export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get("/admin/users", { preHandler: [requireAdmin] }, async (request, reply) => {
     const users = await listUsers();
     const query = asRecord(request.query);
 
     const body = `
-      <section class="page-header under-title">
-        <div>
-          <h1>Benutzerverwaltung</h1>
-          <p>Konten DSGVO-bewusst verwalten (minimal gespeicherte Stammdaten).</p>
-        </div>
-        <div class="action-row admin-users-actions">
-          <a class="button" href="/admin/users/new">Neuen Benutzer anlegen</a>
-          <a class="button secondary" href="/admin/media">Bildverwaltung</a>
-          <a class="button secondary" href="/admin/categories">Kategorien</a>
-          <a class="button secondary" href="/admin/groups">Gruppen</a>
-          <a class="button secondary" href="/admin/index">Suchindex</a>
-        </div>
-      </section>
+      ${renderAdminHeader({
+        title: "Benutzerverwaltung",
+        description: "Konten DSGVO-bewusst verwalten (minimal gespeicherte Stammdaten).",
+        active: "users",
+        actions: '<a class="button" href="/admin/users/new">Neuen Benutzer anlegen</a>'
+      })}
       ${renderUsersTable(request.csrfToken ?? "", request.currentUser?.id ?? "", users)}
     `;
 
@@ -481,22 +641,15 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const orphanCount = report.files.filter((file) => file.referencedBy.length === 0).length;
 
     const body = `
-      <section class="page-header under-title">
-        <div>
-          <h1>Bildverwaltung</h1>
-          <p>Upload-Dateien prüfen, Referenzen nachvollziehen und unbenutzte Bilder entfernen.</p>
-        </div>
-        <div class="action-row">
-          <a class="button secondary" href="/admin/users">Benutzerverwaltung</a>
-          <a class="button secondary" href="/admin/categories">Kategorien</a>
-          <a class="button secondary" href="/admin/groups">Gruppen</a>
-          <a class="button secondary" href="/admin/index">Suchindex</a>
-          <form method="post" action="/admin/media/cleanup" onsubmit="return confirm('Alle ungenutzten Bilddateien wirklich löschen?')">
-            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-            <button type="submit">Ungenutzte Bilder löschen</button>
-          </form>
-        </div>
-      </section>
+      ${renderAdminHeader({
+        title: "Bildverwaltung",
+        description: "Upload-Dateien prüfen, Referenzen nachvollziehen und unbenutzte Bilder entfernen.",
+        active: "media",
+        actions: `<form method="post" action="/admin/media/cleanup" onsubmit="return confirm('Alle ungenutzten Bilddateien wirklich löschen?')">
+          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+          <button type="submit">Ungenutzte Bilder löschen</button>
+        </form>`
+      })}
       <section class="content-wrap">
         <p>
           ${report.files.length} Upload-Datei(en), ${escapeHtml(formatFileSize(report.totalSizeBytes))} gesamt,
@@ -604,18 +757,11 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     }
 
     const body = `
-      <section class="page-header under-title">
-        <div>
-          <h1>Kategorien</h1>
-          <p>Kategorien für Artikel verwalten.</p>
-        </div>
-        <div class="action-row">
-          <a class="button secondary" href="/admin/users">Benutzerverwaltung</a>
-          <a class="button secondary" href="/admin/media">Bildverwaltung</a>
-          <a class="button secondary" href="/admin/groups">Gruppen</a>
-          <a class="button secondary" href="/admin/index">Suchindex</a>
-        </div>
-      </section>
+      ${renderAdminHeader({
+        title: "Kategorien",
+        description: "Kategorien für Artikel verwalten.",
+        active: "categories"
+      })}
       <section class="content-wrap stack">
         <form method="post" action="/admin/categories/new" class="action-row">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
@@ -693,18 +839,11 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     }
 
     const body = `
-      <section class="page-header under-title">
-        <div>
-          <h1>Gruppen</h1>
-          <p>Benutzergruppen für Artikel-Freigaben verwalten.</p>
-        </div>
-        <div class="action-row">
-          <a class="button secondary" href="/admin/users">Benutzerverwaltung</a>
-          <a class="button secondary" href="/admin/media">Bildverwaltung</a>
-          <a class="button secondary" href="/admin/categories">Kategorien</a>
-          <a class="button secondary" href="/admin/index">Suchindex</a>
-        </div>
-      </section>
+      ${renderAdminHeader({
+        title: "Gruppen",
+        description: "Benutzergruppen für Artikel-Freigaben verwalten.",
+        active: "groups"
+      })}
       <section class="content-wrap stack">
         <form method="post" action="/admin/groups/new" class="stack">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
@@ -894,6 +1033,106 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     return reply.redirect(`/admin/groups?notice=${encodeURIComponent("Gruppe gelöscht.")}`);
   });
 
+  app.get("/admin/versions", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const report = await getVersionStoreReport(50);
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Versionshistorie",
+        description: "Aufbewahrung und Kompression der Artikel-Historie zentral verwalten.",
+        active: "versions"
+      })}
+      ${renderVersionManagement(request.csrfToken ?? "", report, query)}
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Versionshistorie",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
+  app.post("/admin/versions/cleanup", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const keepLatest = Number.parseInt(body.keepLatest ?? "", 10);
+    const compressAfter = Number.parseInt(body.compressAfter ?? "", 10);
+
+    if (!Number.isFinite(keepLatest) || keepLatest < 1 || keepLatest > 5000) {
+      return reply.redirect("/admin/versions?error=Ung%C3%BCltiger+Wert+f%C3%BCr+Retention");
+    }
+
+    if (!Number.isFinite(compressAfter) || compressAfter < 0 || compressAfter > 5000) {
+      return reply.redirect("/admin/versions?error=Ung%C3%BCltiger+Wert+f%C3%BCr+Kompression");
+    }
+
+    const cleanup = await cleanupAllPageVersions({
+      keepLatest,
+      compressAfter
+    });
+
+    await writeAuditLog({
+      action: "admin_versions_cleanup",
+      actorId: request.currentUser?.id,
+      details: {
+        keepLatest,
+        compressAfter,
+        scannedSlugs: cleanup.scannedSlugs,
+        compressedFiles: cleanup.compressedFiles,
+        deletedFiles: cleanup.deletedFiles,
+        errors: cleanup.errors.length
+      }
+    });
+
+    const params = new URLSearchParams();
+    params.set(
+      "notice",
+      `Bereinigung abgeschlossen: ${cleanup.compressedFiles} komprimiert, ${cleanup.deletedFiles} gelöscht (${cleanup.scannedSlugs} Artikel).`
+    );
+    params.set("keepLatest", String(keepLatest));
+    params.set("compressAfter", String(compressAfter));
+    if (cleanup.errors.length > 0) {
+      params.set("error", `${cleanup.errors.length} Fehler, siehe Server-Log.`);
+      request.log.warn({ errors: cleanup.errors.slice(0, 20) }, "Versions-Cleanup meldet Fehler");
+    }
+
+    return reply.redirect(`/admin/versions?${params.toString()}`);
+  });
+
+  app.get("/admin/links", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const brokenLinks = await listBrokenInternalLinks();
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Interne Wiki-Links",
+        description: "Prüfung auf defekte [[Seite]]-Verweise im gesamten Wiki.",
+        active: "links"
+      })}
+      ${renderBrokenLinksPanel(brokenLinks)}
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Interne Links",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
   app.get("/admin/index", { preHandler: [requireAdmin] }, async (request, reply) => {
     const query = asRecord(request.query);
     const info = await getSearchIndexInfo();
@@ -901,18 +1140,11 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const runtimeSettings = await getRuntimeSettings();
 
     const body = `
-      <section class="page-header under-title">
-        <div>
-          <h1>Suchindex</h1>
-          <p>Suchindex-Dateien neu generieren und Fortschritt live verfolgen.</p>
-        </div>
-        <div class="action-row">
-          <a class="button secondary" href="/admin/users">Benutzerverwaltung</a>
-          <a class="button secondary" href="/admin/media">Bildverwaltung</a>
-          <a class="button secondary" href="/admin/categories">Kategorien</a>
-          <a class="button secondary" href="/admin/groups">Gruppen</a>
-        </div>
-      </section>
+      ${renderAdminHeader({
+        title: "Suchindex",
+        description: "Suchindex-Dateien neu generieren und Fortschritt live verfolgen.",
+        active: "index"
+      })}
       ${renderIndexManagement(request.csrfToken ?? "", info, status, runtimeSettings.indexBackend)}
     `;
 

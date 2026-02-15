@@ -84,7 +84,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <title>${title}</title>
-    <link rel="stylesheet" href="/styles.css?v=9" />
+    <link rel="stylesheet" href="/styles.css?v=12" />
   </head>
   <body>
     <div class="bg-shape bg-shape-1"></div>
@@ -133,7 +133,14 @@ export const renderPageList = (pages: WikiPageSummary[]): string => {
             </div>
             ${
               page.tags.length > 0
-                ? `<div class="card-tags">${page.tags.map((tag) => `<span class="tag-chip">#${escapeHtml(tag)}</span>`).join("")}</div>`
+                ? `<div class="card-tags">${page.tags
+                    .map(
+                      (tag) =>
+                        `<a class="tag-chip" href="/search?tag=${encodeURIComponent(tag)}" title="Nach Tag filtern: ${escapeHtml(tag)}">#${escapeHtml(
+                          tag
+                        )}</a>`
+                    )
+                    .join("")}</div>`
                 : ""
             }
           </article>

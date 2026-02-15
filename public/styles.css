@@ -404,6 +404,27 @@ a {
   background: #edf9f6;
   color: #33535f;
   font-size: 0.8rem;
+  text-decoration: none;
+}
+
+a.tag-chip:hover {
+  border-color: #8fcfc2;
+  background: #e5f6f2;
+}
+
+.search-active-filters {
+  margin: 0.2rem 0 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.active-filter-badge {
+  border-color: #7bc2b4;
+  background: #d9f2ed;
+  color: #13433d;
+  font-weight: 600;
 }
 
 .auth-shell {
@@ -611,19 +632,28 @@ a[aria-disabled="true"] {
   flex-wrap: wrap;
 }
 
-.admin-users-actions {
-  margin-left: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.admin-users-actions .button {
+.admin-nav .button {
   white-space: nowrap;
 }
 
 .page-header.under-title .action-row {
   justify-content: flex-start;
+}
+
+.button.secondary.is-active-nav,
+.button.secondary[aria-current="page"] {
+  color: white;
+  border-color: transparent;
+  background: linear-gradient(150deg, #0f766e, #0a5f58);
+  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.26);
+}
+
+.admin-page-actions {
+  margin-top: 0.1rem;
+}
+
+.admin-page-actions form {
+  margin: 0;
 }
 
 .admin-index-shell {
@@ -891,6 +921,23 @@ th {
   margin-top: 1.2rem;
 }
 
+.wiki-backlinks {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.wiki-backlinks h2 {
+  margin: 0 0 0.5rem;
+}
+
+.wiki-backlinks ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
 .wiki-content pre {
   background: #12202d;
   color: #ecf1f4;
@@ -976,7 +1023,12 @@ hr {
     align-items: flex-start;
   }
 
-  .admin-users-actions {
+  .admin-nav {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .admin-page-actions {
     justify-content: flex-start;
     width: 100%;
   }

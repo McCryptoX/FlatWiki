@@ -32,6 +32,8 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     PASSWORD_PEPPER: generateHex(24),
     CONTENT_ENCRYPTION_KEY: generateHex(32),
     SESSION_TTL_HOURS: "12",
+    VERSION_HISTORY_RETENTION: "150",
+    VERSION_HISTORY_COMPRESS_AFTER: "30",
     WIKI_TITLE: "FlatWiki",
     INDEX_BACKEND: "flat",
     BOOTSTRAP_ADMIN_USERNAME: "admin"
@@ -59,6 +61,8 @@ const hasExternalConfig = [
   "HOST",
   "PORT",
   "SESSION_TTL_HOURS",
+  "VERSION_HISTORY_RETENTION",
+  "VERSION_HISTORY_COMPRESS_AFTER",
   "WIKI_TITLE",
   "INDEX_BACKEND"
 ].some((key) => Boolean(process.env[key]));
@@ -75,6 +79,12 @@ const parsePositiveInt = (value: string | undefined, fallback: number): number =
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const parseNonNegativeInt = (value: string | undefined, fallback: number): number => {
+  if (value === undefined) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
 const parseIndexBackend = (value: string | undefined): IndexBackend => {
@@ -153,6 +163,8 @@ export const config = {
   cookieSecret: process.env.COOKIE_SECRET ?? "dev-only-change-cookie-secret-please",
   isProduction: process.env.NODE_ENV === "production",
   sessionTtlHours: parsePositiveInt(process.env.SESSION_TTL_HOURS, 12),
+  versionHistoryRetention: parsePositiveInt(process.env.VERSION_HISTORY_RETENTION, 150),
+  versionHistoryCompressAfter: parseNonNegativeInt(process.env.VERSION_HISTORY_COMPRESS_AFTER, 30),
   wikiTitle: process.env.WIKI_TITLE ?? "FlatWiki",
   indexBackend: parseIndexBackend(process.env.INDEX_BACKEND),
   bootstrapAdminUsername: process.env.BOOTSTRAP_ADMIN_USERNAME ?? "admin",

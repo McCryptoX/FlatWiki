@@ -20,6 +20,7 @@ import {
   getPage,
   getPageVersionRawContent,
   isValidSlug,
+  listPageBacklinks,
   listPageHistory,
   listPagesForUser,
   renderMarkdownPreview,
@@ -174,7 +175,8 @@ const renderCategoryFilter = (
   actionPath: string,
   categories: Array<{ id: string; name: string }>,
   selectedCategoryId: string,
-  queryText?: string
+  queryText?: string,
+  activeTag?: string
 ): string => `
   <form method="get" action="${escapeHtml(actionPath)}" class="action-row">
     ${
@@ -182,6 +184,7 @@ const renderCategoryFilter = (
         ? `<input type="search" name="q" value="${escapeHtml(queryText)}" placeholder="Suchbegriff" class="tiny" />`
         : ""
     }
+    ${activeTag ? `<input type="hidden" name="tag" value="${escapeHtml(activeTag)}" />` : ""}
     <label class="sr-only" for="category-filter">Kategorie</label>
     <select id="category-filter" name="category" class="tiny">
       <option value="">Alle Kategorien</option>
@@ -247,6 +250,11 @@ const formatHistoryReason = (reason: string): string => {
   if (reason === "delete") return "Löschen";
   if (reason === "restore-backup") return "Restore-Sicherung";
   return "Bearbeiten";
+};
+
+const normalizeTagFilter = (value: string): string => {
+  const normalized = value.trim().replace(/^#+/, "").toLowerCase();
+  return normalized;
 };
 
 const renderEditorForm = (params: {
@@ -578,6 +586,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     }
 
     const articleToc = renderArticleToc(page.slug, page.tableOfContents);
+    const backlinks = await listPageBacklinks(page.slug, request.currentUser);
     const body = `
       <article class="wiki-page ${articleToc ? "article-layout" : ""}">
         ${articleToc}
@@ -599,6 +608,21 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
             </div>
           </header>
           <section class="wiki-content">${page.html}</section>
+          <section class="wiki-backlinks">
+            <h2>Verlinkt von</h2>
+            ${
+              backlinks.length < 1
+                ? '<p class="muted-note">Keine eingehenden internen Links gefunden.</p>'
+                : `<ul>${backlinks
+                    .map(
+                      (link) =>
+                        `<li><a href="/wiki/${encodeURIComponent(link.slug)}">${escapeHtml(link.title)}</a> <span class="muted-note small">(${escapeHtml(
+                          link.categoryName
+                        )}, ${escapeHtml(formatDate(link.updatedAt))})</span></li>`
+                    )
+                    .join("")}</ul>`
+            }
+          </section>
         </div>
       </article>
     `;
@@ -1373,24 +1397,61 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
   app.get("/search", { preHandler: [requireAuth] }, async (request, reply) => {
     const query = asObject(request.query);
     const q = readSingle(query.q).trim();
+    const activeTag = normalizeTagFilter(readSingle(query.tag));
     const selectedCategoryId = readSingle(query.category);
     const pageNumber = parsePageNumber(readSingle(query.page));
     const categories = await listCategories();
 
-    const rawResults =
-      q.length >= 2 ? await searchPages(q, selectedCategoryId ? { categoryId: selectedCategoryId } : undefined) : [];
-    const results = await filterAccessiblePageSummaries(rawResults, request.currentUser);
+    const hasTextSearch = q.length >= 2;
+    const hasTagFilter = activeTag.length > 0;
+
+    const rawResults = hasTextSearch
+      ? await searchPages(q, selectedCategoryId ? { categoryId: selectedCategoryId } : undefined)
+      : hasTagFilter
+        ? await listPagesForUser(request.currentUser, selectedCategoryId ? { categoryId: selectedCategoryId } : undefined)
+        : [];
+
+    const accessibleResults = hasTextSearch ? await filterAccessiblePageSummaries(rawResults, request.currentUser) : rawResults;
+    const results = hasTagFilter
+      ? accessibleResults.filter((page) => page.tags.some((tag) => tag.toLowerCase() === activeTag))
+      : accessibleResults;
     const paged = paginate(results, pageNumber, 20);
+
+    const clearTagParams = new URLSearchParams();
+    if (q) clearTagParams.set("q", q);
+    if (selectedCategoryId) clearTagParams.set("category", selectedCategoryId);
+    const clearTagUrl = clearTagParams.toString().length > 0 ? `/search?${clearTagParams.toString()}` : "/search";
+
+    const headline = hasTextSearch
+      ? hasTagFilter
+        ? `Ergebnisse für <strong>${escapeHtml(q)}</strong> mit Tag <strong>#${escapeHtml(activeTag)}</strong>`
+        : `Ergebnisse für <strong>${escapeHtml(q)}</strong>`
+      : hasTagFilter
+        ? `Ergebnisse für Tag <strong>#${escapeHtml(activeTag)}</strong>`
+        : q.length > 0
+          ? "Bitte mindestens 2 Zeichen eingeben oder einen Tag auswählen."
+          : "Bitte Suchbegriff eingeben oder Tag auswählen.";
+
+    const activeFilterBadge = hasTagFilter
+      ? `
+        <div class="search-active-filters">
+          <span class="tag-chip active-filter-badge">#${escapeHtml(activeTag)}</span>
+          <a class="button tiny ghost" href="${escapeHtml(clearTagUrl)}">Tag entfernen</a>
+        </div>
+      `
+      : "";
 
     const body = `
       <section class="content-wrap">
         <h1>Suche</h1>
-        ${renderCategoryFilter("/search", categories, selectedCategoryId, q)}
-        <p>${q ? `Ergebnisse für <strong>${escapeHtml(q)}</strong>` : "Bitte Suchbegriff eingeben."}</p>
+        ${renderCategoryFilter("/search", categories, selectedCategoryId, q, activeTag)}
+        ${activeFilterBadge}
+        <p>${headline}</p>
         ${renderPageList(paged.slice)}
         ${renderPager("/search", paged.page, paged.totalPages, {
           q,
-          category: selectedCategoryId
+          category: selectedCategoryId,
+          tag: activeTag
         })}
       </section>
     `;

@@ -5,7 +5,7 @@ tags:
   - markdown
   - editor
 createdAt: "2026-02-15T10:40:00.000Z"
-updatedAt: "2026-02-15T10:40:00.000Z"
+updatedAt: "2026-02-15T17:05:00.000Z"
 updatedBy: system
 ---
 
@@ -48,18 +48,33 @@ Sortierte Liste:
 3. Schritt 3
 ```
 
-## 4. Links
+## 4. Externe Links
 
 ```md
 [OpenAI](https://openai.com)
 ```
 
-## 5. Bilder
-
-Nach dem Upload im Editor kannst du die erzeugte Zeile direkt nutzen:
+## 5. Interne Wiki-Links
 
 ```md
-![Beschreibung](/uploads/eindeutiger-dateiname.png)
+[[Home]]
+[[Markdown-Formatierung HowTo|Format-Hilfe]]
+```
+
+Hinweise:
+
+- Der erste Teil verweist auf eine Wiki-Seite.
+- Mit `|` kannst du einen eigenen Linktext setzen.
+- Defekte interne Links werden im Admin-Bereich unter **Link-Check** angezeigt.
+
+## 6. Bilder
+
+Nach dem Upload im Editor wird dir der passende Markdown-Block automatisch eingefuegt.
+
+Beispielstruktur:
+
+```md
+![Beschreibung](BILD-LINK-AUS-EDITOR)
 ```
 
 Tipps:
@@ -67,13 +82,13 @@ Tipps:
 - Jede Bilddatei wird automatisch sicher umbenannt.
 - Verwende sinnvolle Alt-Texte fuer Barrierefreiheit.
 
-## 6. Zitate
+## 7. Zitate
 
 ```md
 > Das ist ein Zitat.
 ```
 
-## 7. Code
+## 8. Code
 
 Inline-Code:
 
@@ -89,7 +104,7 @@ docker compose up -d --build
 ```
 ````
 
-## 8. Tabellen
+## 9. Tabellen
 
 ```md
 | Spalte A | Spalte B |
@@ -97,15 +112,16 @@ docker compose up -d --build
 | Wert 1 | Wert 2 |
 ```
 
-## 9. Trennlinie
+## 10. Trennlinie
 
 ```md
 ---
 ```
 
-## 10. Gute Praxis
+## 11. Gute Praxis
 
 - Klare Abschnittstitel verwenden.
 - Lange Seiten in mehrere Abschnitte aufteilen.
 - Pro Seite nur ein `#` Haupttitel.
 - Bei Befehlen immer Codeblock statt Fliesstext nutzen.
+- Beim Erstellen kann die **Seitenadresse (URL-Pfad)** automatisch aus dem Titel erzeugt werden.

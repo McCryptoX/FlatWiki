@@ -20,6 +20,8 @@ marked.use({
 
 const SLUG_PATTERN = /^[a-z0-9-]{1,80}$/;
 const SUGGESTION_INDEX_MAX_AGE_MS = 20_000;
+const INTERNAL_LINK_GRAPH_MAX_AGE_MS = 30_000;
+const INTERNAL_LINK_PATTERN = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 
 interface EncryptedPayload {
   encIv: string;
@@ -56,9 +58,40 @@ interface SnapshotSourceMeta {
   updatedBy?: string;
 }
 
+interface InternalWikiLink {
+  targetRaw: string;
+  targetSlug: string;
+  label: string;
+}
+
+interface InternalLinkGraph {
+  summaryBySlug: Map<string, WikiPageSummary>;
+  incomingBySlug: Map<string, string[]>;
+  brokenLinks: WikiBrokenLink[];
+}
+
+export interface WikiBacklinkSummary {
+  slug: string;
+  title: string;
+  categoryName: string;
+  updatedAt: string;
+}
+
+export interface WikiBrokenLink {
+  sourceSlug: string;
+  sourceTitle: string;
+  sourceUpdatedAt: string;
+  targetSlug: string;
+  targetRaw: string;
+  label: string;
+}
+
 let suggestionIndex: SuggestionIndexEntry[] | null = null;
 let suggestionIndexBuiltAt = 0;
 let suggestionIndexDirty = true;
+let internalLinkGraph: InternalLinkGraph | null = null;
+let internalLinkGraphBuiltAt = 0;
+let internalLinkGraphDirty = true;
 const pageRenderCache = new Map<string, PageCacheEntry>();
 let lastWikiMutationAtMs = 0;
 
@@ -69,6 +102,108 @@ const cleanTextExcerpt = (markdown: string): string => {
     .replace(/[#>*_[\]()-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+};
+
+const slugifyLikeTitle = (title: string): string =>
+  title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+
+const protectCodeSegments = (
+  markdown: string
+): {
+  text: string;
+  restore: (value: string) => string;
+} => {
+  const placeholders: string[] = [];
+  const placeholderPrefix = `__flatwiki_code_${Date.now()}_${Math.random().toString(36).slice(2)}_`;
+  let index = 0;
+
+  const text = markdown.replace(/```[\s\S]*?```|`[^`\n]*`/g, (segment) => {
+    const token = `${placeholderPrefix}${index}__`;
+    placeholders.push(segment);
+    index += 1;
+    return token;
+  });
+
+  const restore = (value: string): string => {
+    let restored = value;
+    for (let i = 0; i < placeholders.length; i += 1) {
+      restored = restored.replaceAll(`${placeholderPrefix}${i}__`, placeholders[i] ?? "");
+    }
+    return restored;
+  };
+
+  return { text, restore };
+};
+
+const normalizeInternalLinkTarget = (rawTarget: string): string => {
+  const trimmed = rawTarget.trim();
+  if (!trimmed) return "";
+
+  let normalized = trimmed;
+  if (normalized.startsWith("/wiki/")) {
+    normalized = normalized.slice("/wiki/".length);
+  } else if (normalized.startsWith("wiki/")) {
+    normalized = normalized.slice("wiki/".length);
+  }
+
+  try {
+    normalized = decodeURIComponent(normalized);
+  } catch {
+    // noop
+  }
+
+  normalized = normalized.trim();
+  if (!normalized) return "";
+
+  const lower = normalized.toLowerCase();
+  if (SLUG_PATTERN.test(lower)) return lower;
+
+  return slugifyLikeTitle(normalized);
+};
+
+const parseInternalWikiLinks = (markdown: string): InternalWikiLink[] => {
+  const protectedContent = protectCodeSegments(markdown);
+  const links: InternalWikiLink[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = INTERNAL_LINK_PATTERN.exec(protectedContent.text)) !== null) {
+    const targetRaw = String(match[1] ?? "").trim();
+    const label = String(match[2] ?? targetRaw).trim() || targetRaw;
+    const targetSlug = normalizeInternalLinkTarget(targetRaw);
+    if (!targetSlug) continue;
+
+    links.push({
+      targetRaw,
+      targetSlug,
+      label
+    });
+  }
+
+  INTERNAL_LINK_PATTERN.lastIndex = 0;
+  return links;
+};
+
+const renderInternalWikiLinksToMarkdownLinks = (markdown: string): string => {
+  const protectedContent = protectCodeSegments(markdown);
+  const replaced = protectedContent.text.replace(INTERNAL_LINK_PATTERN, (_full, rawTarget, rawLabel) => {
+    const targetRaw = String(rawTarget ?? "").trim();
+    const targetSlug = normalizeInternalLinkTarget(targetRaw);
+    if (!targetSlug) return String(_full);
+
+    const label = String(rawLabel ?? targetRaw).trim() || targetRaw;
+    const safeLabel = label.replace(/\]/g, "\\]");
+    return `[${safeLabel}](/wiki/${encodeURIComponent(targetSlug)})`;
+  });
+
+  INTERNAL_LINK_PATTERN.lastIndex = 0;
+  return protectedContent.restore(replaced);
 };
 
 const toSafeHtml = (rawHtml: string): string => {
@@ -114,7 +249,8 @@ const collectHeadings = (content: string): WikiHeading[] => {
 };
 
 const renderMarkdownToHtmlWithAnchors = (content: string): { html: string; tableOfContents: WikiHeading[] } => {
-  const tableOfContents = collectHeadings(content);
+  const renderedMarkdown = renderInternalWikiLinksToMarkdownLinks(content);
+  const tableOfContents = collectHeadings(renderedMarkdown);
   const renderer = new marked.Renderer();
   let headingIndex = 0;
 
@@ -136,7 +272,7 @@ const renderMarkdownToHtmlWithAnchors = (content: string): { html: string; table
     return `<h${normalizedDepth} id="${tocEntry.id}">${inner}</h${normalizedDepth}>`;
   };
 
-  const rendered = marked.parse(content, { async: false, renderer });
+  const rendered = marked.parse(renderedMarkdown, { async: false, renderer });
   const html = toSafeHtml(typeof rendered === "string" ? rendered : "");
 
   return {
@@ -470,14 +606,7 @@ const clonePage = (page: WikiPage): WikiPage => ({
 });
 
 export const slugifyTitle = (title: string): string => {
-  return title
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+  return slugifyLikeTitle(title);
 };
 
 export const isValidSlug = (slug: string): boolean => SLUG_PATTERN.test(slug);
@@ -594,6 +723,106 @@ export const listPagesForUser = async (
 ): Promise<WikiPageSummary[]> => {
   const pages = await listPages(options);
   return filterAccessiblePageSummaries(pages, user);
+};
+
+const buildInternalLinkGraph = async (): Promise<InternalLinkGraph> => {
+  const summaries = await listPages({ forceFileScan: true });
+  const summaryBySlug = new Map<string, WikiPageSummary>();
+  const incomingSets = new Map<string, Set<string>>();
+  const brokenLinks: WikiBrokenLink[] = [];
+  const knownSlugs = new Set<string>();
+
+  for (const summary of summaries) {
+    summaryBySlug.set(summary.slug, summary);
+    knownSlugs.add(summary.slug);
+  }
+
+  for (const summary of summaries) {
+    const page = await getPage(summary.slug);
+    if (!page || page.encryptionState === "locked" || page.encryptionState === "error") continue;
+
+    const links = parseInternalWikiLinks(page.content);
+    const seenTargets = new Set<string>();
+    for (const link of links) {
+      if (seenTargets.has(link.targetSlug)) continue;
+      seenTargets.add(link.targetSlug);
+
+      const incoming = incomingSets.get(link.targetSlug) ?? new Set<string>();
+      incoming.add(summary.slug);
+      incomingSets.set(link.targetSlug, incoming);
+
+      if (!knownSlugs.has(link.targetSlug)) {
+        brokenLinks.push({
+          sourceSlug: summary.slug,
+          sourceTitle: summary.title,
+          sourceUpdatedAt: summary.updatedAt,
+          targetSlug: link.targetSlug,
+          targetRaw: link.targetRaw,
+          label: link.label
+        });
+      }
+    }
+  }
+
+  const incomingBySlug = new Map<string, string[]>();
+  for (const [targetSlug, sourceSet] of incomingSets.entries()) {
+    incomingBySlug.set(targetSlug, [...sourceSet].sort((a, b) => a.localeCompare(b)));
+  }
+
+  brokenLinks.sort(
+    (a, b) =>
+      new Date(b.sourceUpdatedAt).getTime() - new Date(a.sourceUpdatedAt).getTime() ||
+      a.sourceTitle.localeCompare(b.sourceTitle, "de", { sensitivity: "base" })
+  );
+
+  return {
+    summaryBySlug,
+    incomingBySlug,
+    brokenLinks
+  };
+};
+
+const getInternalLinkGraph = async (): Promise<InternalLinkGraph> => {
+  const now = Date.now();
+  const expired = now - internalLinkGraphBuiltAt > INTERNAL_LINK_GRAPH_MAX_AGE_MS;
+  if (!internalLinkGraph || internalLinkGraphDirty || expired) {
+    internalLinkGraph = await buildInternalLinkGraph();
+    internalLinkGraphBuiltAt = now;
+    internalLinkGraphDirty = false;
+  }
+
+  return internalLinkGraph;
+};
+
+export const listPageBacklinks = async (
+  targetSlugInput: string,
+  user: PublicUser | undefined
+): Promise<WikiBacklinkSummary[]> => {
+  const targetSlug = targetSlugInput.trim().toLowerCase();
+  if (!isValidSlug(targetSlug)) return [];
+
+  const graph = await getInternalLinkGraph();
+  const sourceSlugs = graph.incomingBySlug.get(targetSlug) ?? [];
+  if (sourceSlugs.length < 1) return [];
+
+  const summaries = sourceSlugs
+    .map((slug) => graph.summaryBySlug.get(slug))
+    .filter((entry): entry is WikiPageSummary => Boolean(entry));
+
+  const visibleSummaries = await filterAccessiblePageSummaries(summaries, user);
+  return visibleSummaries
+    .map((summary) => ({
+      slug: summary.slug,
+      title: summary.title,
+      categoryName: summary.categoryName,
+      updatedAt: summary.updatedAt
+    }))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+};
+
+export const listBrokenInternalLinks = async (): Promise<WikiBrokenLink[]> => {
+  const graph = await getInternalLinkGraph();
+  return [...graph.brokenLinks];
 };
 
 const buildSuggestionIndex = async (options?: { categoryId?: string }): Promise<SuggestionIndexEntry[]> => {
@@ -840,6 +1069,7 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   lastWikiMutationAtMs = Date.now();
   pageRenderCache.delete(slug);
   suggestionIndexDirty = true;
+  internalLinkGraphDirty = true;
 
   return { ok: true };
 };
@@ -885,6 +1115,7 @@ export const deletePage = async (
   lastWikiMutationAtMs = Date.now();
   pageRenderCache.delete(normalizedSlug);
   suggestionIndexDirty = true;
+  internalLinkGraphDirty = true;
   return { ok: true, deleted: true };
 };
 
@@ -1075,6 +1306,7 @@ export const restorePageVersion = async (input: {
   lastWikiMutationAtMs = Date.now();
   pageRenderCache.delete(slug);
   suggestionIndexDirty = true;
+  internalLinkGraphDirty = true;
 
   return { ok: true };
 };
