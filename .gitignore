@@ -8,6 +8,7 @@ data/*
 data/wiki/*
 !data/wiki/Home.md
 !data/wiki/flatwiki-komplette-nutzung.md
+!data/wiki/markdown-formatierung-howto.md
 data/users.json
 data/sessions.json
 data/audit.log
