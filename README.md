@@ -27,8 +27,14 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Gruppen/Rechte-Modell (Admin-Gruppenverwaltung unter `/admin/groups`)
 - Optionale AES-256-Verschlüsselung pro Artikel
 - Versionshistorie pro Artikel mit Restore (Admin)
+- Automatische Historienpflege pro Artikel
+  - Retention-Limit (ältere Versionen werden gelöscht)
+  - Gzip-Kompression älterer Versionen (`.json.gz`)
 - Volltextsuche
 - Live-Vorschläge im Suchfeld während der Eingabe
+- Interne Wiki-Links per `[[Seite]]` oder `[[Seite|Label]]`
+- Backlinks pro Artikel ("Verlinkt von")
+- Defekte interne Links prüfen im Admin-Bereich (`/admin/links`)
 - Pagination für Übersicht, Inhaltsverzeichnis und Suche
 - Inhaltsverzeichnis (`/toc`)
 - Bild-Upload im Editor (1-x Dateien, automatische eindeutige Dateinamen)
@@ -43,15 +49,38 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - Backend umschalten: `flat` oder `sqlite` (Hybrid)
   - Suchindex manuell neu generieren
   - Live-Fortschritt mit Progress-Balken
+- Admin-Versionsverwaltung (`/admin/versions`)
+  - Speicherübersicht der Versionshistorie
+  - Manuelle Bereinigung (Retention + Kompression)
 - Beim Löschen eines Artikels: automatische Entfernung nicht mehr referenzierter Upload-Bilder
 - Admin-Kategorienverwaltung (`/admin/categories`)
 - Admin-Gruppenverwaltung (`/admin/groups`)
 - Visueller Setup-Assistent beim ersten Start (`/setup`)
 - Sicherheitsgrundlagen: `scrypt`, CSRF, Rate-Limit, Security-Header, Audit-Log
 
-## Screenshot
+## Screenshots
 
-![FlatWiki Screenshot](./screenshot.png)
+Startseite:
+
+![FlatWiki Startseite](docs/images/01-startseite.png)
+
+Artikelansicht:
+
+![FlatWiki Artikelansicht](docs/images/02-artikelansicht.png)
+
+Artikel bearbeiten:
+
+![FlatWiki Artikel bearbeiten](docs/images/03-artikel-bearbeiten.png)
+
+Admin-Bereiche:
+
+![Admin Benutzerverwaltung](docs/images/04-admin-benutzerverwaltung.png)
+![Admin Bildverwaltung](docs/images/05-admin-bildverwaltung.png)
+![Admin Kategorien](docs/images/06-admin-kategorien.png)
+![Admin Gruppen](docs/images/07-admin-gruppen.png)
+![Admin Versionen](docs/images/08-admin-versionen.png)
+![Admin Link-Check](docs/images/09-admin-link-check.png)
+![Admin Suchindex](docs/images/10-admin-suchindex.png)
 
 ## Starten
 
@@ -154,6 +183,8 @@ docker compose up -d --build
 - `BOOTSTRAP_ADMIN_PASSWORD` ist optional für Headless-Bootstrap und wird nur beim Erststart genutzt (wenn `data/users.json` leer ist).
 - `PASSWORD_PEPPER` nach dem ersten produktiven Start nicht mehr ändern, sonst funktionieren bestehende Passwörter nicht mehr.
 - `CONTENT_ENCRYPTION_KEY` nach produktivem Start nicht mehr ändern, sonst können bestehende verschlüsselte Artikel nicht mehr gelesen werden.
+- `VERSION_HISTORY_RETENTION` bestimmt, wie viele Versionen pro Artikel behalten werden.
+- `VERSION_HISTORY_COMPRESS_AFTER` bestimmt, ab welcher Position ältere Versionen komprimiert werden.
 - Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
 - Uploads liegen in `data/uploads/` (pro Kategorie in Unterordnern) und werden als `/uploads/...` bereitgestellt.
 
@@ -225,6 +256,8 @@ Optional:
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `WIKI_TITLE`
 - `INDEX_BACKEND` (`flat` oder `sqlite`, Standard: `flat`)
+- `VERSION_HISTORY_RETENTION` (Standard: `150`)
+- `VERSION_HISTORY_COMPRESS_AFTER` (Standard: `30`, `0` = alles komprimieren)
 
 Hybrid-Modus:
 
@@ -249,6 +282,7 @@ git status --short
 - Bilder können direkt im Editor hochgeladen werden.
 - Pro Upload sind mehrere Dateien möglich (1-x).
 - Dateinamen werden automatisch in eindeutige Namen umbenannt.
+- Die Seitenadresse (URL-Pfad) wird aus dem Titel automatisch erzeugt und kann bei Bedarf angepasst werden.
 - Nach dem Upload werden die Markdown-Bildlinks automatisch in den Artikelinhalt eingefügt.
 - Toolbar für schnelle Formatierung (Überschriften, Listen, Links, Code, Tabelle).
 - Live-Vorschau im Editor per Button auf "Vorschau".
