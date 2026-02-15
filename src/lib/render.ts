@@ -58,7 +58,10 @@ export const renderLayout = (options: LayoutOptions): string => {
   const search = user
     ? `
       <form method="get" action="/search" class="search-form">
-        <input type="search" name="q" value="${escapeHtml(options.searchQuery ?? "")}" placeholder="Wiki durchsuchen" required />
+        <div class="search-box" data-search-suggest>
+          <input type="search" name="q" value="${escapeHtml(options.searchQuery ?? "")}" placeholder="Wiki durchsuchen" autocomplete="off" required />
+          <div class="search-suggest" hidden></div>
+        </div>
         <button type="submit">Suchen</button>
       </form>
     `
@@ -69,7 +72,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     options.error ? `<div class="flash error">${escapeHtml(options.error)}</div>` : ""
   ].join("\n");
 
-  const scripts = (options.scripts ?? [])
+  const scripts = [...(user ? ["/search-suggest.js"] : []), ...(options.scripts ?? [])]
     .filter((scriptPath) => scriptPath.startsWith("/"))
     .map((scriptPath) => `<script src="${escapeHtml(scriptPath)}" defer></script>`)
     .join("\n");

@@ -13,6 +13,18 @@ marked.use({
 });
 
 const SLUG_PATTERN = /^[a-z0-9-]{1,80}$/;
+const SUGGESTION_INDEX_MAX_AGE_MS = 20_000;
+
+interface SuggestionIndexEntry {
+  summary: WikiPageSummary;
+  titleLower: string;
+  tagsLower: string[];
+  searchableText: string;
+}
+
+let suggestionIndex: SuggestionIndexEntry[] | null = null;
+let suggestionIndexBuiltAt = 0;
+let suggestionIndexDirty = true;
 
 const cleanTextExcerpt = (markdown: string): string => {
   return markdown
@@ -164,6 +176,34 @@ export const listPages = async (): Promise<WikiPageSummary[]> => {
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 };
 
+const buildSuggestionIndex = async (): Promise<SuggestionIndexEntry[]> => {
+  const pages = await listPages();
+  return pages.map((page) => {
+    const titleLower = page.title.toLowerCase();
+    const tagsLower = page.tags.map((tag) => tag.toLowerCase());
+    const searchableText = `${titleLower}\n${page.excerpt.toLowerCase()}\n${tagsLower.join(" ")}`;
+
+    return {
+      summary: page,
+      titleLower,
+      tagsLower,
+      searchableText
+    };
+  });
+};
+
+const getSuggestionIndex = async (): Promise<SuggestionIndexEntry[]> => {
+  const now = Date.now();
+  const isExpired = now - suggestionIndexBuiltAt > SUGGESTION_INDEX_MAX_AGE_MS;
+  if (!suggestionIndex || suggestionIndexDirty || isExpired) {
+    suggestionIndex = await buildSuggestionIndex();
+    suggestionIndexBuiltAt = now;
+    suggestionIndexDirty = false;
+  }
+
+  return suggestionIndex;
+};
+
 export const getPage = async (slug: string): Promise<WikiPage | null> => {
   if (!isValidSlug(slug)) return null;
   return parseMarkdownPage(slug);
@@ -208,6 +248,7 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   });
 
   await writeTextFile(resolvePagePath(slug), frontmatter.endsWith("\n") ? frontmatter : `${frontmatter}\n`);
+  suggestionIndexDirty = true;
 
   return { ok: true };
 };
@@ -223,6 +264,7 @@ export const deletePage = async (slug: string): Promise<boolean> => {
   }
 
   await removeFile(pagePath);
+  suggestionIndexDirty = true;
   return true;
 };
 
@@ -256,4 +298,43 @@ export const searchPages = async (query: string): Promise<WikiPageSummary[]> => 
     .map((entry) => entry.page);
 
   return hits;
+};
+
+export const suggestPages = async (query: string, limit = 8): Promise<WikiPageSummary[]> => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length < 2) {
+    return [];
+  }
+
+  const safeLimit = Math.min(Math.max(limit, 1), 15);
+  const index = await getSuggestionIndex();
+
+  const scored = index
+    .map((entry) => {
+      let score = 0;
+
+      if (entry.titleLower.startsWith(normalizedQuery)) {
+        score += 9;
+      } else if (entry.titleLower.includes(normalizedQuery)) {
+        score += 6;
+      }
+
+      if (entry.tagsLower.some((tag) => tag.startsWith(normalizedQuery))) {
+        score += 4;
+      } else if (entry.tagsLower.some((tag) => tag.includes(normalizedQuery))) {
+        score += 2;
+      }
+
+      if (entry.searchableText.includes(normalizedQuery)) {
+        score += 1;
+      }
+
+      return { score, page: entry.summary };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || new Date(b.page.updatedAt).getTime() - new Date(a.page.updatedAt).getTime())
+    .slice(0, safeLimit)
+    .map((entry) => entry.page);
+
+  return scored;
 };

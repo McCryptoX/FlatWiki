@@ -22,6 +22,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - eigenes Passwort ändern
   - eigene Daten exportieren
 - Volltextsuche
+- Live-Vorschläge im Suchfeld während der Eingabe
 - Inhaltsverzeichnis (`/toc`)
 - Bild-Upload im Editor (1-x Dateien, automatische eindeutige Dateinamen)
 - Automatische Artikel-Navigation (links) aus Markdown-Überschriften

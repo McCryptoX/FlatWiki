@@ -7,7 +7,7 @@ import { requireAdmin, requireAuth, verifySessionCsrfToken } from "../lib/auth.j
 import { writeAuditLog } from "../lib/audit.js";
 import { config } from "../config.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
-import { deletePage, getPage, isValidSlug, listPages, savePage, searchPages, slugifyTitle } from "../lib/wikiStore.js";
+import { deletePage, getPage, isValidSlug, listPages, savePage, searchPages, slugifyTitle, suggestPages } from "../lib/wikiStore.js";
 
 const asRecord = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object") return {};
@@ -550,5 +550,29 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         searchQuery: q
       })
     );
+  });
+
+  app.get("/api/search/suggest", { preHandler: [requireAuth] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const q = (query.q ?? "").trim();
+    const requestedLimit = Number.parseInt(query.limit ?? "8", 10);
+    const limit = Number.isFinite(requestedLimit) ? requestedLimit : 8;
+
+    if (q.length < 2) {
+      return reply.send({ ok: true, suggestions: [] });
+    }
+
+    const suggestions = await suggestPages(q, limit);
+
+    return reply.send({
+      ok: true,
+      suggestions: suggestions.map((page) => ({
+        slug: page.slug,
+        title: page.title,
+        tags: page.tags,
+        updatedAt: page.updatedAt,
+        url: `/wiki/${page.slug}`
+      }))
+    });
   });
 };

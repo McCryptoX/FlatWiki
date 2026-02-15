@@ -116,8 +116,55 @@ a {
   align-items: center;
 }
 
+.search-box {
+  position: relative;
+}
+
 .search-form input {
   min-width: min(38vw, 260px);
+}
+
+.search-suggest {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  right: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 16px 36px rgba(31, 42, 55, 0.16);
+  z-index: 30;
+  overflow: hidden;
+}
+
+.search-suggest ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.search-suggest li + li {
+  border-top: 1px solid var(--line);
+}
+
+.search-suggest-link {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.5rem 0.65rem;
+  text-decoration: none;
+}
+
+.search-suggest-link:hover {
+  background: #f5fbf9;
+}
+
+.search-suggest-title {
+  font-weight: 600;
+}
+
+.search-suggest-meta {
+  font-size: 0.82rem;
+  color: var(--muted);
 }
 
 .nav-right {
