@@ -44,6 +44,11 @@ export const listUsers = async (): Promise<PublicUser[]> => {
   return users.map(toPublicUser);
 };
 
+export const hasAnyUser = async (): Promise<boolean> => {
+  const users = await loadUsers();
+  return users.length > 0;
+};
+
 export const findUserById = async (id: string): Promise<PublicUser | null> => {
   const users = await loadUsers();
   const user = users.find((candidate) => candidate.id === id);
@@ -109,6 +114,43 @@ export const createUser = async (input: CreateUserInput): Promise<{ user?: Publi
     await saveUsers(users);
 
     return { user: toPublicUser(newUser) };
+  });
+};
+
+export const setupInitialAdmin = async (input: {
+  username: string;
+  displayName: string;
+  password: string;
+}): Promise<{ user?: PublicUser; error?: string }> => {
+  return withMutationLock(async () => {
+    const users = await loadUsers();
+    if (users.length > 0) {
+      return { error: "Setup bereits abgeschlossen." };
+    }
+
+    const validationError = validateUserInput({
+      username: input.username,
+      displayName: input.displayName
+    });
+    if (validationError) {
+      return { error: validationError };
+    }
+
+    const normalizedUsername = normalizeUsername(input.username);
+    const now = new Date().toISOString();
+    const admin: UserRecord = {
+      id: randomUUID(),
+      username: normalizedUsername,
+      displayName: input.displayName.trim(),
+      role: "admin",
+      passwordHash: await hashPassword(input.password),
+      createdAt: now,
+      updatedAt: now,
+      disabled: false
+    };
+
+    await saveUsers([admin]);
+    return { user: toPublicUser(admin) };
   });
 };
 
@@ -233,15 +275,19 @@ export const touchLastLogin = async (userId: string): Promise<void> => {
   });
 };
 
-export const ensureInitialAdmin = async (): Promise<{ created: boolean; username?: string; temporaryPassword?: string }> => {
+export const ensureInitialAdmin = async (): Promise<{ created: boolean; username?: string; pendingSetup: boolean }> => {
   return withMutationLock(async () => {
     const users = await loadUsers();
     if (users.length > 0) {
-      return { created: false };
+      return { created: false, pendingSetup: false };
+    }
+
+    const bootstrapPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+    if (!bootstrapPassword) {
+      return { created: false, pendingSetup: true };
     }
 
     const username = normalizeUsername(process.env.BOOTSTRAP_ADMIN_USERNAME ?? "admin");
-    const temporaryPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD ?? randomUUID().slice(0, 16);
 
     const now = new Date().toISOString();
     const admin: UserRecord = {
@@ -249,7 +295,7 @@ export const ensureInitialAdmin = async (): Promise<{ created: boolean; username
       username,
       displayName: "Administrator",
       role: "admin",
-      passwordHash: await hashPassword(temporaryPassword),
+      passwordHash: await hashPassword(bootstrapPassword),
       createdAt: now,
       updatedAt: now,
       disabled: false
@@ -257,14 +303,11 @@ export const ensureInitialAdmin = async (): Promise<{ created: boolean; username
 
     await saveUsers([admin]);
 
-    const result: { created: true; username: string; temporaryPassword?: string } = {
+    const result: { created: true; username: string; pendingSetup: false } = {
       created: true,
-      username
+      username,
+      pendingSetup: false
     };
-
-    if (!process.env.BOOTSTRAP_ADMIN_PASSWORD) {
-      result.temporaryPassword = temporaryPassword;
-    }
 
     return result;
   });

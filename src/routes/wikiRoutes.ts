@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { requireAdmin, requireAuth, verifySessionCsrfToken } from "../lib/auth.js";
 import { writeAuditLog } from "../lib/audit.js";
+import { config } from "../config.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
 import { deletePage, getPage, isValidSlug, listPages, savePage, searchPages, slugifyTitle } from "../lib/wikiStore.js";
 
@@ -35,6 +40,62 @@ const groupPagesByInitial = (pages: Awaited<ReturnType<typeof listPages>>): Arra
   }));
 };
 
+const MIME_EXTENSION_MAP: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/avif": "avif"
+};
+
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "avif"]);
+
+const escapeMarkdownText = (value: string): string => value.replace(/([\\`*_[\]])/g, "\\$1");
+
+const normalizeUploadExtension = (filename: string | undefined, mimeType: string): string | null => {
+  const fromName = path.extname(filename ?? "").replace(".", "").toLowerCase();
+  if (fromName && ALLOWED_UPLOAD_EXTENSIONS.has(fromName)) {
+    return fromName === "jpeg" ? "jpg" : fromName;
+  }
+
+  const fromMime = MIME_EXTENSION_MAP[mimeType];
+  return fromMime ?? null;
+};
+
+const sanitizeAltText = (filename: string): string => {
+  const base = path.parse(filename).name;
+  const cleaned = base
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+
+  return cleaned || "Bild";
+};
+
+const renderArticleToc = (slug: string, headings: Array<{ id: string; text: string; depth: number }>): string => {
+  if (headings.length < 2) {
+    return "";
+  }
+
+  return `
+    <aside class="article-toc" aria-label="Inhaltsverzeichnis">
+      <h2>Inhaltsverzeichnis</h2>
+      <ul>
+        ${headings
+          .map(
+            (heading) => `
+              <li class="depth-${Math.min(Math.max(heading.depth, 2), 6)}">
+                <a href="/wiki/${escapeHtml(slug)}#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>
+              </li>
+            `
+          )
+          .join("")}
+      </ul>
+    </aside>
+  `;
+};
+
 const renderEditorForm = (params: {
   mode: "new" | "edit";
   action: string;
@@ -45,24 +106,41 @@ const renderEditorForm = (params: {
   csrfToken: string;
   slugLocked?: boolean;
 }): string => `
-  <section class="content-wrap">
+  <section class="content-wrap editor-shell">
     <h1>${params.mode === "new" ? "Neue Seite" : "Seite bearbeiten"}</h1>
-    <form method="post" action="${escapeHtml(params.action)}" class="stack large">
-      <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
-      <label>Titel
-        <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" />
-      </label>
-      <label>Slug
-        <input type="text" name="slug" value="${escapeHtml(params.slug)}" ${params.slugLocked ? "readonly" : ""} required pattern="[a-z0-9-]{1,80}" />
-      </label>
-      <label>Tags (kommagetrennt)
-        <input type="text" name="tags" value="${escapeHtml(params.tags)}" />
-      </label>
-      <label>Inhalt (Markdown)
-        <textarea name="content" rows="18" required>${escapeHtml(params.content)}</textarea>
-      </label>
-      <button type="submit">${params.mode === "new" ? "Seite erstellen" : "Änderungen speichern"}</button>
-    </form>
+    <div class="editor-grid">
+      <form method="post" action="${escapeHtml(params.action)}" class="stack large">
+        <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
+        <label>Titel
+          <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" />
+        </label>
+        <label>Slug
+          <input type="text" name="slug" value="${escapeHtml(params.slug)}" ${params.slugLocked ? "readonly" : ""} required pattern="[a-z0-9-]{1,80}" />
+        </label>
+        <label>Tags (kommagetrennt)
+          <input type="text" name="tags" value="${escapeHtml(params.tags)}" />
+        </label>
+        <label>Inhalt (Markdown)
+          <textarea name="content" rows="18" required>${escapeHtml(params.content)}</textarea>
+        </label>
+        <button type="submit">${params.mode === "new" ? "Seite erstellen" : "Änderungen speichern"}</button>
+      </form>
+
+      <aside class="upload-panel">
+        <h2>Bilder einfügen</h2>
+        <p class="muted-note">Du kannst 1-x Bilder hochladen. Dateien werden automatisch sicher umbenannt.</p>
+        <form method="post" enctype="multipart/form-data" class="stack image-upload-form" data-upload-endpoint="/api/uploads" data-csrf="${escapeHtml(
+          params.csrfToken
+        )}">
+          <label>Bilder auswählen
+            <input type="file" name="images" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple required />
+          </label>
+          <button type="submit" class="secondary">Bilder hochladen</button>
+        </form>
+        <p class="muted-note small">Nach dem Upload werden Markdown-Zeilen automatisch in den Inhalt eingefügt.</p>
+        <textarea class="upload-markdown-output" rows="6" readonly placeholder="Upload-Ausgabe erscheint hier"></textarea>
+      </aside>
+    </div>
   </section>
 `;
 
@@ -167,21 +245,25 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         );
     }
 
+    const articleToc = renderArticleToc(page.slug, page.tableOfContents);
     const body = `
-      <article class="wiki-page">
-        <header>
-          <h1>${escapeHtml(page.title)}</h1>
-          <p class="meta">Zuletzt geändert: ${escapeHtml(page.updatedAt)} | von ${escapeHtml(page.updatedBy)}</p>
-          <div class="actions">
-            <a class="button secondary" href="/wiki/${escapeHtml(page.slug)}/edit">Bearbeiten</a>
-            ${
-              request.currentUser?.role === "admin"
-                ? `<form method="post" action="/wiki/${escapeHtml(page.slug)}/delete" onsubmit="return confirm('Seite wirklich löschen?')"><input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" /><button class="danger" type="submit">Löschen</button></form>`
-                : ""
-            }
-          </div>
-        </header>
-        <section class="wiki-content">${page.html}</section>
+      <article class="wiki-page ${articleToc ? "article-layout" : ""}">
+        ${articleToc}
+        <div class="article-main">
+          <header>
+            <h1>${escapeHtml(page.title)}</h1>
+            <p class="meta">Zuletzt geändert: ${escapeHtml(page.updatedAt)} | von ${escapeHtml(page.updatedBy)}</p>
+            <div class="actions">
+              <a class="button secondary" href="/wiki/${escapeHtml(page.slug)}/edit">Bearbeiten</a>
+              ${
+                request.currentUser?.role === "admin"
+                  ? `<form method="post" action="/wiki/${escapeHtml(page.slug)}/delete" onsubmit="return confirm('Seite wirklich löschen?')"><input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" /><button class="danger" type="submit">Löschen</button></form>`
+                  : ""
+              }
+            </div>
+          </header>
+          <section class="wiki-content">${page.html}</section>
+        </div>
       </article>
     `;
 
@@ -218,7 +300,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        error: query.error
+        error: query.error,
+        scripts: ["/editor.js"]
       })
     );
   });
@@ -299,9 +382,83 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        error: query.error
+        error: query.error,
+        scripts: ["/editor.js"]
       })
     );
+  });
+
+  app.post("/api/uploads", { preHandler: [requireAuth] }, async (request, reply) => {
+    const csrfToken = request.headers["x-csrf-token"];
+    const csrfValue = Array.isArray(csrfToken) ? csrfToken[0] ?? "" : csrfToken ?? "";
+
+    if (!verifySessionCsrfToken(request, csrfValue)) {
+      return reply.code(400).send({ ok: false, error: "Ungültiges CSRF-Token." });
+    }
+
+    if (!request.isMultipart()) {
+      return reply.code(400).send({ ok: false, error: "Erwarteter Multipart-Upload." });
+    }
+
+    const uploaded: Array<{ url: string; markdown: string; originalName: string; storedName: string }> = [];
+    const rejected: string[] = [];
+
+    try {
+      for await (const part of request.parts()) {
+        if (part.type !== "file") {
+          continue;
+        }
+
+        if (part.fieldname !== "images") {
+          part.file.resume();
+          continue;
+        }
+
+        const extension = normalizeUploadExtension(part.filename, part.mimetype);
+        if (!extension || !part.mimetype.startsWith("image/")) {
+          rejected.push(`${part.filename ?? "Datei"}: Nicht unterstütztes Bildformat.`);
+          part.file.resume();
+          continue;
+        }
+
+        const storedName = `${Date.now()}-${randomUUID().replaceAll("-", "")}.${extension}`;
+        const targetPath = path.join(config.uploadDir, storedName);
+
+        await pipeline(part.file, createWriteStream(targetPath, { flags: "wx" }));
+
+        const url = `/uploads/${storedName}`;
+        const alt = escapeMarkdownText(sanitizeAltText(part.filename ?? "Bild"));
+
+        uploaded.push({
+          url,
+          markdown: `![${alt}](${url})`,
+          originalName: part.filename ?? storedName,
+          storedName
+        });
+      }
+    } catch (error) {
+      request.log.warn({ error }, "Upload fehlgeschlagen");
+      return reply.code(400).send({ ok: false, error: "Upload fehlgeschlagen. Bitte Dateigröße/Format prüfen." });
+    }
+
+    if (uploaded.length === 0) {
+      return reply.code(400).send({ ok: false, error: rejected[0] ?? "Keine Bilder hochgeladen." });
+    }
+
+    await writeAuditLog({
+      action: "wiki_image_upload",
+      actorId: request.currentUser?.id,
+      details: {
+        count: uploaded.length
+      }
+    });
+
+    return reply.send({
+      ok: true,
+      files: uploaded,
+      markdown: uploaded.map((file) => file.markdown).join("\n"),
+      rejected
+    });
   });
 
   app.post("/wiki/:slug/edit", { preHandler: [requireAuth] }, async (request, reply) => {

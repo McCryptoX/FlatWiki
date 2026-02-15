@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../config.js";
-import type { WikiPage, WikiPageSummary } from "../types.js";
+import type { WikiHeading, WikiPage, WikiPageSummary } from "../types.js";
 import { ensureDir, listFiles, readTextFile, removeFile, writeTextFile } from "./fileStore.js";
 
 marked.use({
@@ -29,9 +29,39 @@ const toSafeHtml = (rawHtml: string): string => {
     allowedAttributes: {
       a: ["href", "target", "rel"],
       img: ["src", "alt", "title"],
-      "*": ["class"]
+      "*": ["class", "id"]
     },
     allowedSchemes: ["http", "https", "mailto"]
+  });
+};
+
+const headingAnchorSlug = (text: string): string =>
+  text
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "section";
+
+const collectHeadings = (content: string): WikiHeading[] => {
+  const tokens = marked.lexer(content, { gfm: true, breaks: true });
+  const headings = tokens.filter((token): token is Tokens.Heading => token.type === "heading" && token.depth >= 2);
+  const usedIds = new Map<string, number>();
+
+  return headings.map((heading) => {
+    const text = heading.text.trim() || "Abschnitt";
+    const base = headingAnchorSlug(text);
+    const seen = usedIds.get(base) ?? 0;
+    usedIds.set(base, seen + 1);
+
+    const id = seen === 0 ? base : `${base}-${seen + 1}`;
+    return {
+      id,
+      text,
+      depth: Math.min(Math.max(heading.depth, 2), 6)
+    };
   });
 };
 
@@ -57,7 +87,29 @@ const parseMarkdownPage = async (slug: string): Promise<WikiPage | null> => {
   const updatedAt = String(data.updatedAt ?? createdAt);
   const updatedBy = String(data.updatedBy ?? "unknown");
   const content = parsed.content.trim();
-  const rendered = marked.parse(content, { async: false });
+  const tableOfContents = collectHeadings(content);
+  const renderer = new marked.Renderer();
+  let headingIndex = 0;
+
+  renderer.heading = function headingWithAnchor({ tokens, depth }: Tokens.Heading): string {
+    const inner = this.parser.parseInline(tokens);
+    const normalizedDepth = Math.min(Math.max(depth, 1), 6);
+
+    if (normalizedDepth < 2) {
+      return `<h${normalizedDepth}>${inner}</h${normalizedDepth}>`;
+    }
+
+    const tocEntry = tableOfContents[headingIndex];
+    headingIndex += 1;
+
+    if (!tocEntry) {
+      return `<h${normalizedDepth}>${inner}</h${normalizedDepth}>`;
+    }
+
+    return `<h${normalizedDepth} id="${tocEntry.id}">${inner}</h${normalizedDepth}>`;
+  };
+
+  const rendered = marked.parse(content, { async: false, renderer });
   const html = toSafeHtml(typeof rendered === "string" ? rendered : "");
 
   return {
@@ -66,6 +118,7 @@ const parseMarkdownPage = async (slug: string): Promise<WikiPage | null> => {
     tags,
     content,
     html,
+    tableOfContents,
     createdAt,
     updatedAt,
     updatedBy

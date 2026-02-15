@@ -29,6 +29,7 @@ interface LayoutOptions {
   notice?: string | undefined;
   error?: string | undefined;
   searchQuery?: string | undefined;
+  scripts?: string[] | undefined;
 }
 
 export const renderLayout = (options: LayoutOptions): string => {
@@ -68,6 +69,11 @@ export const renderLayout = (options: LayoutOptions): string => {
     options.error ? `<div class="flash error">${escapeHtml(options.error)}</div>` : ""
   ].join("\n");
 
+  const scripts = (options.scripts ?? [])
+    .filter((scriptPath) => scriptPath.startsWith("/"))
+    .map((scriptPath) => `<script src="${escapeHtml(scriptPath)}" defer></script>`)
+    .join("\n");
+
   return `<!doctype html>
 <html lang="de">
   <head>
@@ -98,6 +104,7 @@ export const renderLayout = (options: LayoutOptions): string => {
       <a href="/privacy">Datenschutz</a>
       <a href="/impressum">Impressum</a>
     </footer>
+    ${scripts}
   </body>
 </html>`;
 };

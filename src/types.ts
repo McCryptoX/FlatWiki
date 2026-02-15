@@ -30,6 +30,7 @@ export interface WikiPage {
   tags: string[];
   content: string;
   html: string;
+  tableOfContents: WikiHeading[];
   createdAt: string;
   updatedAt: string;
   updatedBy: string;
@@ -41,4 +42,10 @@ export interface WikiPageSummary {
   tags: string[];
   excerpt: string;
   updatedAt: string;
+}
+
+export interface WikiHeading {
+  id: string;
+  text: string;
+  depth: number;
 }

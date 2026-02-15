@@ -2,7 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { deleteSession, getSessionById } from "./sessionStore.js";
-import { findUserById } from "./userStore.js";
+import { findUserById, hasAnyUser } from "./userStore.js";
 
 const SESSION_COOKIE = "fw_sid";
 const LOGIN_CSRF_COOKIE = "fw_login_csrf";
@@ -86,12 +86,24 @@ export const attachCurrentUser = async (request: FastifyRequest, reply: FastifyR
 export const requireAuth = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
   if (request.currentUser) return;
 
+  const usersExist = await hasAnyUser();
+  if (!usersExist) {
+    reply.redirect("/setup");
+    return;
+  }
+
   const next = encodeURIComponent(request.raw.url ?? "/");
   reply.redirect(`/login?next=${next}`);
 };
 
 export const requireAdmin = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
   if (!request.currentUser) {
+    const usersExist = await hasAnyUser();
+    if (!usersExist) {
+      reply.redirect("/setup");
+      return;
+    }
+
     const next = encodeURIComponent(request.raw.url ?? "/");
     reply.redirect(`/login?next=${next}`);
     return;

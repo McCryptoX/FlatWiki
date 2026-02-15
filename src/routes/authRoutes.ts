@@ -10,7 +10,7 @@ import {
 } from "../lib/auth.js";
 import { createSession, deleteSession } from "../lib/sessionStore.js";
 import { escapeHtml, renderLayout } from "../lib/render.js";
-import { touchLastLogin, verifyUserCredentials } from "../lib/userStore.js";
+import { hasAnyUser, touchLastLogin, verifyUserCredentials } from "../lib/userStore.js";
 import { writeAuditLog } from "../lib/audit.js";
 
 const asRecord = (value: unknown): Record<string, string> => {
@@ -31,6 +31,11 @@ const sanitizeNextPath = (nextPath: string | undefined): string => {
 
 export const registerAuthRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get("/login", async (request, reply) => {
+    const usersExist = await hasAnyUser();
+    if (!usersExist) {
+      return reply.redirect("/setup");
+    }
+
     if (request.currentUser) {
       return reply.redirect("/");
     }
@@ -58,7 +63,7 @@ export const registerAuthRoutes = async (app: FastifyInstance): Promise<void> =>
             <button type="submit">Anmelden</button>
           </form>
           <p class="muted-note">
-            Kein Konto? Benutzer werden im Admin-Bereich angelegt.
+            Kein Konto? Beim Erststart zuerst <a href="/setup">Setup</a> ausführen, danach Benutzer im Admin-Bereich anlegen.
           </p>
         </article>
       </section>
@@ -85,6 +90,11 @@ export const registerAuthRoutes = async (app: FastifyInstance): Promise<void> =>
       }
     },
     async (request, reply) => {
+      const usersExist = await hasAnyUser();
+      if (!usersExist) {
+        return reply.redirect("/setup");
+      }
+
       const body = asRecord(request.body);
       const token = body._csrf ?? "";
       const next = sanitizeNextPath(body.next);

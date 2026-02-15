@@ -309,6 +309,29 @@ a {
   padding: 1.4rem;
 }
 
+.editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 1rem;
+}
+
+.upload-panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem;
+  background: #fff;
+}
+
+.muted-note.small {
+  font-size: 0.84rem;
+}
+
+.upload-markdown-output {
+  margin-top: 0.4rem;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.84rem;
+}
+
 .auth-card {
   width: min(420px, 100%);
 }
@@ -443,6 +466,69 @@ th {
   padding: 1.3rem;
 }
 
+.article-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  align-items: start;
+  gap: 1.1rem;
+}
+
+.article-main {
+  min-width: 0;
+}
+
+.article-toc {
+  position: sticky;
+  top: 90px;
+  align-self: start;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: white;
+}
+
+.article-toc h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.6rem;
+}
+
+.article-toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.article-toc li {
+  line-height: 1.3;
+}
+
+.article-toc li.depth-3 {
+  padding-left: 0.6rem;
+}
+
+.article-toc li.depth-4 {
+  padding-left: 1.2rem;
+}
+
+.article-toc li.depth-5 {
+  padding-left: 1.8rem;
+}
+
+.article-toc li.depth-6 {
+  padding-left: 2.4rem;
+}
+
+.article-toc a {
+  text-decoration: none;
+  color: var(--muted);
+}
+
+.article-toc a:hover {
+  color: var(--ink);
+}
+
 .meta {
   color: var(--muted);
 }
@@ -518,5 +604,17 @@ hr {
   .toc-list li {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .article-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .article-toc {
+    position: static;
   }
 }

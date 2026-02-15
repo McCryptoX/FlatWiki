@@ -23,6 +23,9 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - eigene Daten exportieren
 - Volltextsuche
 - Inhaltsverzeichnis (`/toc`)
+- Bild-Upload im Editor (1-x Dateien, automatische eindeutige Dateinamen)
+- Automatische Artikel-Navigation (links) aus Markdown-Überschriften
+- Visueller Setup-Assistent beim ersten Start (`/setup`)
 - Sicherheitsgrundlagen: `scrypt`, CSRF, Rate-Limit, Security-Header, Audit-Log
 
 ## Screenshot
@@ -36,10 +39,14 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 Voraussetzungen: Node.js 20+, npm
 
 ```bash
-cp config.env.example config.env
+./install.sh
 npm install
 npm run dev
 ```
+
+Danach im Browser öffnen und Setup abschließen:
+
+- [http://127.0.0.1:3000/setup](http://127.0.0.1:3000/setup)
 
 Produktion:
 
@@ -53,7 +60,7 @@ npm start
 Voraussetzungen: Docker Engine + Compose + Buildx
 
 ```bash
-cp config.env.example config.env
+./install.sh
 docker compose up -d --build
 ```
 
@@ -86,7 +93,7 @@ newgrp docker
 Danach FlatWiki starten:
 
 ```bash
-cp config.env.example config.env
+./install.sh
 docker compose up -d --build
 ```
 
@@ -105,6 +112,7 @@ docker compose down
 Aufruf:
 
 - [http://127.0.0.1:3000](http://127.0.0.1:3000)
+- beim ersten Start: [http://127.0.0.1:3000/setup](http://127.0.0.1:3000/setup)
 
 ### Docker-Fehlerbehebung
 
@@ -121,20 +129,23 @@ docker compose up -d --build
 
 ## Wichtige Hinweise
 
-- `BOOTSTRAP_ADMIN_PASSWORD` wird nur beim Erststart genutzt (wenn `data/users.json` leer ist).
+- Der erste Admin wird standardmäßig über den Setup-Assistenten (`/setup`) angelegt.
+- `BOOTSTRAP_ADMIN_PASSWORD` ist optional für Headless-Bootstrap und wird nur beim Erststart genutzt (wenn `data/users.json` leer ist).
 - `PASSWORD_PEPPER` nach dem ersten produktiven Start nicht mehr ändern, sonst funktionieren bestehende Passwörter nicht mehr.
 - Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
+- Uploads liegen in `data/uploads/` und werden als `/uploads/...` bereitgestellt.
 
 ## Erstes Admin-Konto
 
-Beim ersten Start wird ein Admin erstellt, wenn `data/users.json` leer ist.
+Beim ersten Start öffnest du `/setup` und legst dort den ersten Admin an:
 
-- Benutzername: `admin` (oder `BOOTSTRAP_ADMIN_USERNAME`)
-- Passwort:
-  - aus `BOOTSTRAP_ADMIN_PASSWORD`, falls gesetzt
-  - sonst temporär im Server-Log
+- Admin-Benutzername
+- Anzeigename
+- Passwort
 
-Danach Passwort direkt ändern.
+Optional (ohne UI): Wenn `BOOTSTRAP_ADMIN_PASSWORD` gesetzt ist, wird beim Erststart automatisch ein Admin erstellt.
+
+Hinweis: Existiert bereits ein Konto in `data/users.json`, wird `/setup` übersprungen.
 
 ### Admin-Passwort per CLI zurücksetzen (Docker)
 
@@ -176,6 +187,11 @@ NODE
 
 Datei: `config.env`
 
+Installer:
+
+- `./install.sh` erstellt/ergänzt `config.env` automatisch und generiert sichere Einmalwerte.
+- Beim ersten App-Start ergänzt FlatWiki fehlende Schlüssel ebenfalls automatisch.
+
 Pflicht in Produktion:
 
 - `COOKIE_SECRET` (langes zufälliges Secret)
@@ -186,6 +202,14 @@ Optional:
 - `BOOTSTRAP_ADMIN_USERNAME`
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `WIKI_TITLE`
+
+## Artikel-Editor
+
+- Bilder können direkt im Editor hochgeladen werden.
+- Pro Upload sind mehrere Dateien möglich (1-x).
+- Dateinamen werden automatisch in eindeutige Namen umbenannt.
+- Nach dem Upload werden die Markdown-Bildlinks automatisch in den Artikelinhalt eingefügt.
+- Überschriften (`##`, `###`, ...) erzeugen automatisch eine linke Artikel-Navigation.
 
 ## Repository-Struktur
 
@@ -200,6 +224,7 @@ Optional:
 ├─ Dockerfile
 ├─ docker-compose.yml
 ├─ config.env.example
+├─ install.sh
 ├─ data/
 │  └─ wiki/
 ├─ public/
