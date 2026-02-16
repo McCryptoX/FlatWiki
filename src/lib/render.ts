@@ -128,6 +128,7 @@ export const renderPageList = (pages: WikiPageSummary[]): string => {
             <div class="card-meta">
               <span class="meta-pill">${formatDate(page.updatedAt)}</span>
               <span class="meta-pill">Kategorie: ${escapeHtml(page.categoryName)}</span>
+              ${page.sensitive ? '<span class="meta-pill">Sensibel</span>' : ""}
               <span class="meta-pill">${page.visibility === "restricted" ? "Zugriff: eingeschränkt" : "Zugriff: alle"}</span>
               <span class="meta-pill">${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"}</span>
             </div>

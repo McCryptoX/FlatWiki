@@ -340,6 +340,7 @@ const renderEditorForm = (params: {
   slugLocked?: boolean;
   categories: Array<{ id: string; name: string }>;
   selectedCategoryId: string;
+  sensitive: boolean;
   visibility: "all" | "restricted";
   allowedUsers: string[];
   allowedGroups: string[];
@@ -416,7 +417,7 @@ const renderEditorForm = (params: {
                     <button type="button" class="button secondary tiny wizard-sensitivity" data-wizard-sensitivity="sensitive">Sensibel</button>
                   </div>
                   <p class="muted-note small" data-wizard-sensitivity-note>
-                    Sensibel setzt Zugriff auf ausgewählte Benutzer und aktiviert Verschlüsselung (wenn verfügbar).
+                    Sensibel erzwingt eingeschränkten Zugriff und Verschlüsselung.
                   </p>
                 </div>
               </section>
@@ -460,6 +461,16 @@ const renderEditorForm = (params: {
               .join("")}
           </select>
         </label>
+        <label class="checkline standalone-checkline">
+          <input type="checkbox" name="sensitive" value="1" data-sensitive-toggle ${params.sensitive ? "checked" : ""} />
+          <span>Sensibler Artikel (erzwingt eingeschränkten Zugriff + Verschlüsselung)</span>
+        </label>
+        <p class="muted-note small">Warnung: Keine PIN, TAN, vollständige Kartendaten oder Geheimnisse im Klartext speichern.</p>
+        ${
+          params.encryptionAvailable
+            ? ""
+            : '<p class="muted-note small">Hinweis: Sensibler Modus ist nur mit <code>CONTENT_ENCRYPTION_KEY</code> verfügbar.</p>'
+        }
         <label>Zugriff
           <select name="visibility">
             <option value="all" ${params.visibility === "all" ? "selected" : ""}>Alle angemeldeten Benutzer</option>
@@ -585,6 +596,7 @@ const buildEditorRedirectQuery = (params: {
   tags: string;
   content: string;
   categoryId: string;
+  sensitive: boolean;
   visibility: "all" | "restricted";
   allowedUsers: string[];
   allowedGroups: string[];
@@ -599,6 +611,7 @@ const buildEditorRedirectQuery = (params: {
   query.set("tags", params.tags);
   query.set("content", params.content);
   query.set("categoryId", params.categoryId);
+  query.set("sensitive", params.sensitive ? "1" : "0");
   query.set("visibility", params.visibility);
   query.set("allowedUsers", params.allowedUsers.join(","));
   query.set("allowedGroups", params.allowedGroups.join(","));
@@ -752,7 +765,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         <div class="article-main">
           <header>
             <h1>${escapeHtml(page.title)}</h1>
-            <p class="meta">Kategorie: ${escapeHtml(page.categoryName)} | Zugriff: ${
+            <p class="meta">Kategorie: ${escapeHtml(page.categoryName)} | ${
+              page.sensitive ? "Sensibel | " : ""
+            }Zugriff: ${
               page.visibility === "restricted" ? "eingeschränkt" : "alle"
             } | ${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"} | Integrität: ${
               page.integrityState === "valid"
@@ -763,6 +778,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                     ? "nicht prüfbar"
                     : "fehlerhaft"
             }</p>
+            ${
+              page.sensitive
+                ? '<p class="muted-note">Sensibler Modus aktiv. Keine PIN/TAN, vollständige Kartendaten oder Geheimnisse im Klartext speichern.</p>'
+                : ""
+            }
             <p class="meta">Zuletzt geändert: ${escapeHtml(page.updatedAt)} | von ${escapeHtml(page.updatedBy)}</p>
             <div class="actions">
               <a class="button secondary" href="/wiki/${encodeURIComponent(page.slug)}/edit">Bearbeiten</a>
@@ -821,11 +841,16 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const draftTags = readSingle(query.tags);
     const draftContent = readSingle(query.content);
     const selectedCategoryId = readSingle(query.categoryId) || defaultCategory.id;
-    const visibility = readSingle(query.visibility) === "restricted" ? "restricted" : "all";
+    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
+    let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : "all";
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers));
     const knownGroupIds = new Set(groups.map((group) => group.id));
     const allowedGroups = normalizeIds(readMany(query.allowedGroups)).filter((groupId) => knownGroupIds.has(groupId));
-    const encrypted = readSingle(query.encrypted) === "1";
+    let encrypted = readSingle(query.encrypted) === "1";
+    if (sensitive) {
+      visibility = "restricted";
+      encrypted = true;
+    }
 
     const body = renderEditorForm({
       mode: "new",
@@ -838,6 +863,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       csrfToken: request.csrfToken ?? "",
       categories: categories.map((entry) => ({ id: entry.id, name: entry.name })),
       selectedCategoryId,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -863,7 +889,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=10"]
+        scripts: ["/wiki-ui.js?v=11"]
       })
     );
   });
@@ -884,9 +910,30 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
 
-    const visibility = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
+    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(body.sensitive).trim().toLowerCase());
+    let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
     const selectedCategoryId = readSingle(body.categoryId);
-    const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    let encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    if (sensitive) {
+      visibility = "restricted";
+      encrypted = true;
+    }
+    if (sensitive && !config.contentEncryptionKey) {
+      const query = buildEditorRedirectQuery({
+        error: "Sensibler Modus benötigt CONTENT_ENCRYPTION_KEY.",
+        title,
+        slug,
+        tags: tagsRaw,
+        content,
+        categoryId: selectedCategoryId,
+        sensitive,
+        visibility,
+        allowedUsers: normalizeUsernames(readMany(body.allowedUsers)),
+        allowedGroups: normalizeIds(readMany(body.allowedGroups)),
+        encrypted
+      });
+      return reply.redirect(`/new?${query}`);
+    }
 
     const knownUsernames = new Set((await listUsers()).filter((user) => !user.disabled).map((user) => user.username.toLowerCase()));
     const knownGroupIds = new Set((await listGroups()).map((group) => group.id));
@@ -911,6 +958,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        sensitive,
         visibility,
         allowedUsers,
         allowedGroups,
@@ -928,6 +976,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        sensitive,
         visibility,
         allowedUsers,
         allowedGroups,
@@ -940,6 +989,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slug,
       title,
       categoryId: selectedCategoryId,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -957,6 +1007,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        sensitive,
         visibility,
         allowedUsers,
         allowedGroups,
@@ -1018,13 +1069,20 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const tags = readSingle(query.tags) || page.tags.join(", ");
     const content = readSingle(query.content) || page.content;
     const selectedCategoryId = readSingle(query.categoryId) || page.categoryId;
-    const visibility = readSingle(query.visibility) === "restricted" ? "restricted" : page.visibility;
+    const sensitiveRaw = readSingle(query.sensitive).trim().toLowerCase();
+    const sensitive =
+      ["1", "true", "on", "yes"].includes(sensitiveRaw) ? true : ["0", "false", "off", "no"].includes(sensitiveRaw) ? false : page.sensitive;
+    let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : page.visibility;
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers).length > 0 ? readMany(query.allowedUsers) : page.allowedUsers);
     const knownGroupIds = new Set(groups.map((group) => group.id));
     const allowedGroups = normalizeIds(readMany(query.allowedGroups).length > 0 ? readMany(query.allowedGroups) : page.allowedGroups).filter(
       (groupId) => knownGroupIds.has(groupId)
     );
-    const encrypted = readSingle(query.encrypted) ? readSingle(query.encrypted) === "1" : page.encrypted;
+    let encrypted = readSingle(query.encrypted) ? readSingle(query.encrypted) === "1" : page.encrypted;
+    if (sensitive) {
+      visibility = "restricted";
+      encrypted = true;
+    }
 
     const body = renderEditorForm({
       mode: "edit",
@@ -1038,6 +1096,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slugLocked: true,
       categories: categories.map((entry) => ({ id: entry.id, name: entry.name })),
       selectedCategoryId,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -1055,7 +1114,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=10"]
+        scripts: ["/wiki-ui.js?v=11"]
       })
     );
   });
@@ -1066,6 +1125,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const query = asObject(request.query);
     const selectedCategoryId = readSingle(query.categoryId);
     const pageSlug = readSingle(query.slug).trim().toLowerCase();
+    const sensitiveContext = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
     const encryptedContext = ["1", "true", "on"].includes(readSingle(query.encrypted).trim().toLowerCase());
     const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
     const uploadSubDir = category.uploadFolder.trim() || "allgemein";
@@ -1075,10 +1135,10 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       return reply.code(400).send({ ok: false, error: "Ungültiges CSRF-Token." });
     }
 
-    if (encryptedContext) {
+    if (sensitiveContext || encryptedContext) {
       return reply.code(400).send({
         ok: false,
-        error: "Bei verschlüsselten Artikeln ist Bild-Upload deaktiviert."
+        error: "Bei sensiblen oder verschlüsselten Artikeln ist Bild-Upload deaktiviert."
       });
     }
 
@@ -1216,8 +1276,13 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const content = readSingle(body.content);
 
     const selectedCategoryId = readSingle(body.categoryId);
-    const visibility = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
-    const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(body.sensitive).trim().toLowerCase());
+    let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
+    let encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    if (sensitive) {
+      visibility = "restricted";
+      encrypted = true;
+    }
 
     const knownUsernames = new Set((await listUsers()).filter((user) => !user.disabled).map((user) => user.username.toLowerCase()));
     const knownGroupIds = new Set((await listGroups()).map((group) => group.id));
@@ -1234,10 +1299,28 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       }
     }
 
+    if (sensitive && !config.contentEncryptionKey) {
+      const query = buildEditorRedirectQuery({
+        error: "Sensibler Modus benötigt CONTENT_ENCRYPTION_KEY.",
+        title,
+        tags: tagsRaw,
+        content,
+        categoryId: selectedCategoryId,
+        sensitive,
+        visibility,
+        allowedUsers,
+        allowedGroups,
+        encrypted
+      });
+
+      return reply.redirect(`/wiki/${encodeURIComponent(params.slug)}/edit?${query}`);
+    }
+
     const result = await savePage({
       slug: params.slug,
       title,
       categoryId: selectedCategoryId,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -1254,6 +1337,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        sensitive,
         visibility,
         allowedUsers,
         allowedGroups,

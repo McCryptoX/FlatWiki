@@ -159,6 +159,7 @@
     const tagsInput = editorShell.querySelector('input[name="tags"]');
     const uploadForm = editorShell.querySelector(".image-upload-form");
     const output = editorShell.querySelector(".upload-markdown-output");
+    const sensitiveToggle = editorShell.querySelector('input[name="sensitive"][data-sensitive-toggle], input[name="sensitive"]');
     const encryptionToggle = editorShell.querySelector('input[name="encrypted"][data-encrypted-toggle], input[name="encrypted"]');
     const visibilitySelect = editorShell.querySelector('select[name="visibility"]');
     const restrictedSections = Array.from(editorShell.querySelectorAll("[data-restricted-only]"));
@@ -359,17 +360,36 @@
         if (mode === "sensitive") {
           wizardSensitivityNote.textContent =
             encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled
-              ? "Sensibel aktiv: Zugriff nur ausgewählt + Verschlüsselung aktiviert."
-              : "Sensibel aktiv: Zugriff nur ausgewählt. Verschlüsselung ist aktuell nicht verfügbar.";
+              ? "Sensibel aktiv: Zugriff nur ausgewählt + Verschlüsselung aktiviert. Keine PIN/TAN im Klartext speichern."
+              : "Sensibel derzeit nicht möglich: CONTENT_ENCRYPTION_KEY fehlt.";
         } else {
           wizardSensitivityNote.textContent = "Standard aktiv: Alle angemeldeten Benutzer mit Zugriff.";
         }
       }
     };
 
+    const setSensitiveFlag = (active) => {
+      if (!(sensitiveToggle instanceof HTMLInputElement)) return;
+      sensitiveToggle.checked = Boolean(active);
+    };
+
+    const isSensitiveSelected = () => sensitiveToggle instanceof HTMLInputElement && sensitiveToggle.checked;
+
     const applySensitivity = (mode) => {
       if (!(visibilitySelect instanceof HTMLSelectElement)) return;
-      selectedSensitivity = mode === "sensitive" ? "sensitive" : "normal";
+      const wantsSensitive = mode === "sensitive";
+      if (wantsSensitive && encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
+        selectedSensitivity = "normal";
+        setSensitiveFlag(false);
+        visibilitySelect.value = "all";
+        visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
+        setSensitivityVisual("normal");
+        renderWizardStates();
+        return;
+      }
+
+      selectedSensitivity = wantsSensitive ? "sensitive" : "normal";
+      setSensitiveFlag(selectedSensitivity === "sensitive");
       visibilitySelect.value = selectedSensitivity === "sensitive" ? "restricted" : "all";
       visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -384,7 +404,15 @@
 
     const syncSensitivityFromForm = () => {
       if (!(visibilitySelect instanceof HTMLSelectElement)) return;
-      selectedSensitivity = visibilitySelect.value === "restricted" ? "sensitive" : "normal";
+      if (isSensitiveSelected()) {
+        selectedSensitivity = "sensitive";
+        visibilitySelect.value = "restricted";
+        if (encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled) {
+          encryptionToggle.checked = true;
+        }
+      } else {
+        selectedSensitivity = "normal";
+      }
       setSensitivityVisual(selectedSensitivity);
       renderWizardStates();
     };
@@ -500,6 +528,9 @@
 
     if (visibilitySelect instanceof HTMLSelectElement) {
       visibilitySelect.addEventListener("change", () => {
+        if (isSensitiveSelected() && visibilitySelect.value !== "restricted") {
+          visibilitySelect.value = "restricted";
+        }
         syncRestrictedVisibility();
         syncSensitivityFromForm();
         for (const picker of accessPickers) {
@@ -510,7 +541,32 @@
 
     if (encryptionToggle instanceof HTMLInputElement) {
       encryptionToggle.addEventListener("change", () => {
+        if (isSensitiveSelected() && !encryptionToggle.checked && !encryptionToggle.disabled) {
+          encryptionToggle.checked = true;
+        }
+        syncSensitivityFromForm();
         syncUploadAvailability();
+      });
+    }
+
+    if (sensitiveToggle instanceof HTMLInputElement) {
+      if (encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
+        sensitiveToggle.checked = false;
+        sensitiveToggle.disabled = true;
+      }
+      sensitiveToggle.addEventListener("change", () => {
+        if (sensitiveToggle.checked) {
+          if (encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
+            sensitiveToggle.checked = false;
+          } else {
+            applySensitivity("sensitive");
+            return;
+          }
+        } else {
+          applySensitivity("normal");
+          return;
+        }
+        syncSensitivityFromForm();
       });
     }
 

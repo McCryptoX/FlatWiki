@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
   title TEXT NOT NULL,
   categoryId TEXT NOT NULL,
   categoryName TEXT NOT NULL,
+  sensitive INTEGER NOT NULL DEFAULT 0,
   visibility TEXT NOT NULL,
   allowedUsers TEXT NOT NULL,
   allowedGroups TEXT NOT NULL,
@@ -137,12 +138,15 @@ const ensureSchema = (db: SqlJsDatabase): void => {
 
   const stmt = db.prepare("PRAGMA table_info(pages)");
   let hasAllowedGroups = false;
+  let hasSensitive = false;
   try {
     while (stmt.step()) {
       const row = stmt.getAsObject();
       if (String(row.name ?? "").trim() === "allowedGroups") {
         hasAllowedGroups = true;
-        break;
+      }
+      if (String(row.name ?? "").trim() === "sensitive") {
+        hasSensitive = true;
       }
     }
   } finally {
@@ -151,6 +155,9 @@ const ensureSchema = (db: SqlJsDatabase): void => {
 
   if (!hasAllowedGroups) {
     db.run("ALTER TABLE pages ADD COLUMN allowedGroups TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!hasSensitive) {
+    db.run("ALTER TABLE pages ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0");
   }
 };
 
@@ -210,41 +217,61 @@ const parseArray = (raw: unknown, lowercase = true): string[] => {
 };
 
 const normalizeEntry = (entry: SqliteIndexEntry): SqliteIndexEntry => ({
-  slug: String(entry.slug ?? "").trim().toLowerCase(),
-  title: String(entry.title ?? "").trim(),
-  categoryId: String(entry.categoryId ?? "").trim() || "default",
-  categoryName: String(entry.categoryName ?? "").trim() || "Allgemein",
-  visibility: entry.visibility === "restricted" ? "restricted" : "all",
-  allowedUsers: [...entry.allowedUsers].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
-  allowedGroups: [...entry.allowedGroups].map((value) => value.trim()).filter((value) => value.length > 0),
-  encrypted: entry.encrypted === true,
-  tags: [...entry.tags].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
-  excerpt: String(entry.excerpt ?? "").trim(),
-  updatedAt: String(entry.updatedAt ?? "").trim(),
-  searchableText: String(entry.searchableText ?? "").toLowerCase().replace(/\s+/g, " ").trim(),
-  updatedAtMs: toInt(entry.updatedAtMs)
+  ...(() => {
+    const title = String(entry.title ?? "").trim();
+    const tags = [...entry.tags].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
+    const sensitive = entry.sensitive === true;
+    const encrypted = entry.encrypted === true;
+    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(entry.excerpt ?? "").trim();
+    const searchableText =
+      encrypted || sensitive
+        ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
+        : String(entry.searchableText ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+    return {
+      slug: String(entry.slug ?? "").trim().toLowerCase(),
+      title,
+      categoryId: String(entry.categoryId ?? "").trim() || "default",
+      categoryName: String(entry.categoryName ?? "").trim() || "Allgemein",
+      sensitive,
+      visibility: entry.visibility === "restricted" ? "restricted" : "all",
+      allowedUsers: [...entry.allowedUsers].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
+      allowedGroups: [...entry.allowedGroups].map((value) => value.trim()).filter((value) => value.length > 0),
+      encrypted,
+      tags,
+      excerpt,
+      updatedAt: String(entry.updatedAt ?? "").trim(),
+      searchableText,
+      updatedAtMs: toInt(entry.updatedAtMs)
+    };
+  })()
 });
 
 const mapRowToEntry = (row: Record<string, unknown>): SqliteIndexEntry => {
   const title = String(row.title ?? "").trim();
   const slug = String(row.slug ?? "").trim().toLowerCase();
+  const sensitive = toInt(row.sensitive) === 1;
+  const encrypted = toInt(row.encrypted) === 1;
   const tags = parseArray(row.tags);
-  const excerpt = String(row.excerpt ?? "").trim();
+  const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(row.excerpt ?? "").trim();
   const searchableText =
-    String(row.searchableText ?? `${title}\n${tags.join(" ")}\n${excerpt}`)
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
+    encrypted || sensitive
+      ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
+      : String(row.searchableText ?? `${title}\n${tags.join(" ")}\n${excerpt}`)
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
 
   return {
     slug,
     title: title || slug,
     categoryId: String(row.categoryId ?? "").trim() || "default",
     categoryName: String(row.categoryName ?? "").trim() || "Allgemein",
+    sensitive,
     visibility: row.visibility === "restricted" ? "restricted" : "all",
     allowedUsers: parseArray(row.allowedUsers),
     allowedGroups: parseArray(row.allowedGroups, false),
-    encrypted: toInt(row.encrypted) === 1,
+    encrypted,
     tags,
     excerpt,
     updatedAt: String(row.updatedAt ?? "").trim(),
@@ -290,12 +317,13 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
   const normalized = normalizeEntry(entry);
   db.run(
     `INSERT INTO pages (
-      slug, title, categoryId, categoryName, visibility, allowedUsers, allowedGroups, encrypted, tags, excerpt, updatedAt, updatedAtMs, searchableText
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      slug, title, categoryId, categoryName, sensitive, visibility, allowedUsers, allowedGroups, encrypted, tags, excerpt, updatedAt, updatedAtMs, searchableText
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(slug) DO UPDATE SET
       title = excluded.title,
       categoryId = excluded.categoryId,
       categoryName = excluded.categoryName,
+      sensitive = excluded.sensitive,
       visibility = excluded.visibility,
       allowedUsers = excluded.allowedUsers,
       allowedGroups = excluded.allowedGroups,
@@ -310,6 +338,7 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
       normalized.title,
       normalized.categoryId,
       normalized.categoryName,
+      normalized.sensitive ? 1 : 0,
       normalized.visibility,
       JSON.stringify(normalized.allowedUsers),
       JSON.stringify(normalized.allowedGroups),

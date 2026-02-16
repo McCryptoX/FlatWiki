@@ -61,7 +61,8 @@ Hinweise:
 - Die **Seitenadresse** wird beim Tippen des Titels automatisch erstellt.
 - Erlaubt sind `a-z`, `0-9` und `-`.
 - Existiert die Seitenadresse bereits, zeigt FlatWiki eine Fehlermeldung.
-- Bei **Sensibel** wird Zugriff eingeschraenkt; mit aktivem `CONTENT_ENCRYPTION_KEY` wird zusaetzlich Verschluesselung aktiviert.
+- Bei **Sensibel** wird Zugriff immer auf **nur ausgewaehlte Benutzer/Gruppen** gesetzt und Verschluesselung erzwungen.
+- Ohne `CONTENT_ENCRYPTION_KEY` kann ein sensibler Artikel nicht gespeichert werden.
 
 ## 4. Seite bearbeiten
 
@@ -90,6 +91,10 @@ Nur Benutzer mit Rolle `admin` duerfen Seiten loeschen.
 - Tags
 - Seiteninhalt
 - Auszuege aus Markdown-Text
+
+Hinweis:
+
+- Bei sensiblen/verschluesselten Artikeln werden nur Metadaten (z. B. Titel/Tags) indexiert, kein Klartext-Inhalt.
 
 ## 7. Interne Links und Backlinks
 
@@ -157,11 +162,14 @@ Pro Artikel kannst du:
 
 - den Zugriff einschraenken (nur ausgewaehlte Benutzer/Gruppen)
 - optional **Verschluesselung im Dateisystem (AES-256)** aktivieren
+- den Modus **Sensibel** aktivieren
 
 Wichtig:
 
-- Fuer Verschluesselung muss `CONTENT_ENCRYPTION_KEY` gesetzt sein.
+- Sensibel erzwingt eingeschraenkten Zugriff und aktivierte Verschluesselung.
+- Fuer Verschluesselung/Sensibel muss `CONTENT_ENCRYPTION_KEY` gesetzt sein.
 - Ohne korrekten Schluessel koennen verschluesselte Seiten nicht gelesen werden.
+- Sensible Inhalte werden nicht als Klartext in den Suchindex uebernommen.
 
 ## 12. Dateibasiertes Datenmodell
 

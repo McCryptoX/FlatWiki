@@ -22,7 +22,7 @@ const SLUG_PATTERN = /^[a-z0-9-]{1,80}$/;
 const SUGGESTION_INDEX_MAX_AGE_MS = 20_000;
 const INTERNAL_LINK_GRAPH_MAX_AGE_MS = 30_000;
 const INTERNAL_LINK_PATTERN = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
-const CONTENT_INTEGRITY_VERSION = 1;
+const CONTENT_INTEGRITY_VERSION = 2;
 
 interface EncryptedPayload {
   encIv: string;
@@ -31,9 +31,11 @@ interface EncryptedPayload {
 }
 
 interface IntegrityPayloadInput {
+  integrityVersion?: number;
   slug: string;
   title: string;
   categoryId: string;
+  sensitive: boolean;
   visibility: WikiVisibility;
   allowedUsers: string[];
   allowedGroups: string[];
@@ -309,6 +311,8 @@ const normalizeTags = (rawTags: unknown): string[] => {
     .slice(0, 20);
 };
 
+const normalizeSensitive = (value: unknown): boolean => value === true;
+
 const normalizeVisibility = (value: unknown): WikiVisibility => (value === "restricted" ? "restricted" : "all");
 
 const normalizeAllowedUsers = (value: unknown): string[] => {
@@ -494,8 +498,9 @@ const decryptContent = (payload: EncryptedPayload): string | null => {
 };
 
 const buildIntegrityPayload = (input: IntegrityPayloadInput): string => {
-  const canonical = {
-    version: CONTENT_INTEGRITY_VERSION,
+  const version = input.integrityVersion ?? CONTENT_INTEGRITY_VERSION;
+  const canonical: Record<string, unknown> = {
+    version,
     slug: input.slug.trim().toLowerCase(),
     title: input.title.trim(),
     categoryId: input.categoryId.trim(),
@@ -513,6 +518,9 @@ const buildIntegrityPayload = (input: IntegrityPayloadInput): string => {
     encTag: input.encTag,
     encData: input.encData
   };
+  if (version >= 2) {
+    canonical.sensitive = input.sensitive === true;
+  }
   return JSON.stringify(canonical);
 };
 
@@ -561,9 +569,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   const data = parsed.data as Record<string, unknown>;
 
   const category = await resolveCategoryMeta(String(data.categoryId ?? "").trim());
-  const visibility = normalizeVisibility(data.visibility);
-  const allowedUsers = visibility === "restricted" ? normalizeAllowedUsers(data.allowedUsers) : [];
-  const allowedGroups = visibility === "restricted" ? normalizeAllowedGroups(data.allowedGroups) : [];
+  const requestedVisibility = normalizeVisibility(data.visibility);
 
   const title = String(data.title ?? slug).trim() || slug;
   const tags = normalizeTags(data.tags);
@@ -577,6 +583,11 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   const encryptedByPayload =
     typeof data.encIv === "string" && typeof data.encTag === "string" && typeof data.encData === "string";
   const encrypted = encryptedByMeta || encryptedByPayload;
+  const sensitiveByMeta = normalizeSensitive(data.sensitive);
+  const sensitive = sensitiveByMeta || (requestedVisibility === "restricted" && encrypted);
+  const visibility: WikiVisibility = sensitive ? "restricted" : requestedVisibility;
+  const allowedUsers = visibility === "restricted" ? normalizeAllowedUsers(data.allowedUsers) : [];
+  const allowedGroups = visibility === "restricted" ? normalizeAllowedGroups(data.allowedGroups) : [];
   const encIv = String(data.encIv ?? "");
   const encTag = String(data.encTag ?? "");
   const encData = String(data.encData ?? "");
@@ -588,15 +599,17 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   let integrityState: WikiPage["integrityState"] = "legacy";
 
   if (hasIntegrityInfo) {
-    if (integrityVersion !== CONTENT_INTEGRITY_VERSION || integrityHmac.length < 1) {
+    if ((integrityVersion !== 1 && integrityVersion !== CONTENT_INTEGRITY_VERSION) || integrityHmac.length < 1) {
       integrityState = "invalid";
     } else if (!config.contentIntegrityKey) {
       integrityState = "unverifiable";
     } else {
       const payload = buildIntegrityPayload({
+        integrityVersion,
         slug,
         title,
         categoryId: category.id,
+        sensitive,
         visibility,
         allowedUsers,
         allowedGroups,
@@ -617,6 +630,30 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
 
   let encryptionState: WikiPage["encryptionState"] = "none";
   let content = rawBody;
+
+  if (sensitive && !encrypted) {
+    return {
+      slug,
+      title,
+      categoryId: category.id,
+      categoryName: category.name,
+      sensitive,
+      visibility,
+      allowedUsers,
+      allowedGroups,
+      encrypted,
+      encryptionState: "error",
+      integrityState,
+      tags,
+      content: "",
+      html: '<p class="muted-note">Sensibler Artikel ist nicht verschlüsselt. Zugriff wurde aus Sicherheitsgründen blockiert.</p>',
+      tableOfContents: [],
+      createdBy,
+      createdAt,
+      updatedAt,
+      updatedBy
+    };
+  }
 
   if (encrypted) {
     const decrypted = decryptContent({
@@ -645,6 +682,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
       title,
       categoryId: category.id,
       categoryName: category.name,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -673,6 +711,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
       title,
       categoryId: category.id,
       categoryName: category.name,
+      sensitive,
       visibility,
       allowedUsers,
       allowedGroups,
@@ -697,6 +736,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
     title,
     categoryId: category.id,
     categoryName: category.name,
+    sensitive,
     visibility,
     allowedUsers,
     allowedGroups,
@@ -719,6 +759,7 @@ const toSummary = (page: WikiPage): WikiPageSummary => ({
   title: page.title,
   categoryId: page.categoryId,
   categoryName: page.categoryName,
+  sensitive: page.sensitive,
   visibility: page.visibility,
   allowedUsers: page.allowedUsers,
   allowedGroups: page.allowedGroups,
@@ -735,6 +776,7 @@ const toSummary = (page: WikiPage): WikiPageSummary => ({
 
 const clonePage = (page: WikiPage): WikiPage => ({
   ...page,
+  sensitive: page.sensitive,
   tags: [...page.tags],
   allowedUsers: [...page.allowedUsers],
   allowedGroups: [...page.allowedGroups],
@@ -1001,6 +1043,7 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
           title: entry.title,
           categoryId: entry.categoryId,
           categoryName: entry.categoryName,
+          sensitive: entry.sensitive,
           visibility: entry.visibility,
           allowedUsers: entry.allowedUsers,
           allowedGroups: entry.allowedGroups,
@@ -1037,12 +1080,14 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
     if (!isValidSlug(slug)) continue;
 
     const encrypted = raw.encrypted === true;
-    const excerpt = encrypted ? "Verschlüsselter Inhalt" : String(raw.excerpt ?? "").trim();
+    const sensitive = raw.sensitive === true || (encrypted && raw.visibility === "restricted");
+    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(raw.excerpt ?? "").trim();
     const summary: WikiPageSummary = {
       slug,
       title: String(raw.title ?? slug).trim() || slug,
       categoryId: String(raw.categoryId ?? "").trim() || "default",
       categoryName: String(raw.categoryName ?? "Allgemein").trim() || "Allgemein",
+      sensitive,
       visibility: raw.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: Array.isArray(raw.allowedUsers)
         ? raw.allowedUsers.map((entry) => String(entry).trim().toLowerCase()).filter((entry) => entry.length > 0)
@@ -1060,7 +1105,9 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
 
     const titleLower = summary.title.toLowerCase();
     const tagsLower = summary.tags.map((tag) => tag.toLowerCase());
-    const persistedSearchableText = encrypted ? `${titleLower}\n${tagsLower.join(" ")}\n${summary.excerpt}` : String(raw.searchableText ?? `${titleLower}\n${summary.excerpt}\n${tagsLower.join(" ")}`);
+    const persistedSearchableText = encrypted || sensitive
+      ? `${titleLower}\n${tagsLower.join(" ")}\n${summary.excerpt}`
+      : String(raw.searchableText ?? `${titleLower}\n${summary.excerpt}\n${tagsLower.join(" ")}`);
     const searchableText = persistedSearchableText
       .toLowerCase()
       .replace(/\s+/g, " ")
@@ -1103,6 +1150,7 @@ export interface SavePageInput {
   content: string;
   updatedBy: string;
   categoryId?: string;
+  sensitive?: boolean;
   visibility?: WikiVisibility;
   allowedUsers?: string[];
   allowedGroups?: string[];
@@ -1127,7 +1175,9 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const existingPage = await getPage(slug);
 
   const category = (await findCategoryById(input.categoryId ?? "")) ?? (await getDefaultCategory());
-  const visibility = input.visibility === "restricted" ? "restricted" : "all";
+  const requestedSensitive = input.sensitive === true;
+  const requestedVisibility = input.visibility === "restricted" ? "restricted" : "all";
+  const visibility = requestedSensitive ? "restricted" : requestedVisibility;
   const allowedUsers = visibility === "restricted" ? normalizeAllowedUsers(input.allowedUsers ?? []) : [];
   const allowedGroups = visibility === "restricted" ? normalizeAllowedGroups(input.allowedGroups ?? []) : [];
 
@@ -1138,7 +1188,11 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
     };
   }
 
-  const encrypted = Boolean(input.encrypted);
+  const encrypted = requestedSensitive ? true : Boolean(input.encrypted);
+  const sensitive = requestedSensitive;
+  if (sensitive && !config.contentEncryptionKey) {
+    return { ok: false, error: "Sensibler Modus ist nicht möglich: CONTENT_ENCRYPTION_KEY fehlt." };
+  }
   if (encrypted && !config.contentEncryptionKey) {
     return { ok: false, error: "Verschlüsselung ist nicht möglich: CONTENT_ENCRYPTION_KEY fehlt." };
   }
@@ -1155,6 +1209,7 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const frontmatterData: Record<string, unknown> = {
     title,
     categoryId: category.id,
+    sensitive,
     visibility,
     allowedUsers,
     allowedGroups,
@@ -1186,9 +1241,11 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   }
 
   const integrityPayload = buildIntegrityPayload({
+    integrityVersion: CONTENT_INTEGRITY_VERSION,
     slug,
     title,
     categoryId: category.id,
+    sensitive,
     visibility,
     allowedUsers,
     allowedGroups,
@@ -1343,7 +1400,11 @@ export const searchPages = async (query: string, options?: { categoryId?: string
   const hits = pageDetails
     .filter((entry): entry is { summary: WikiPageSummary; full: WikiPage } => entry !== null)
     .map((entry) => {
-      const haystack = `${entry.summary.title}\n${entry.summary.excerpt}\n${entry.full.content}\n${entry.summary.tags.join(" ")}`.toLowerCase();
+      const searchableContent =
+        entry.full.sensitive || entry.full.encrypted || entry.full.integrityState === "invalid" || entry.full.integrityState === "unverifiable"
+          ? ""
+          : entry.full.content;
+      const haystack = `${entry.summary.title}\n${entry.summary.excerpt}\n${searchableContent}\n${entry.summary.tags.join(" ")}`.toLowerCase();
       const score = haystack.includes(normalizedQuery)
         ? (entry.summary.title.toLowerCase().includes(normalizedQuery) ? 4 : 2) +
           (entry.summary.tags.some((tag) => tag.includes(normalizedQuery)) ? 2 : 0)

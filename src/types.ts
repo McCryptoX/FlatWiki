@@ -65,6 +65,7 @@ export interface WikiPage {
   title: string;
   categoryId: string;
   categoryName: string;
+  sensitive: boolean;
   visibility: WikiVisibility;
   allowedUsers: string[];
   allowedGroups: string[];
@@ -86,6 +87,7 @@ export interface WikiPageSummary {
   title: string;
   categoryId: string;
   categoryName: string;
+  sensitive: boolean;
   visibility: WikiVisibility;
   allowedUsers: string[];
   allowedGroups: string[];

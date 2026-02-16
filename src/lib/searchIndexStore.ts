@@ -49,7 +49,7 @@ export interface SearchIndexInfo {
   fileSizeBytes: number;
 }
 
-const INDEX_VERSION = 3;
+const INDEX_VERSION = 4;
 
 const isSqliteBackend = (): boolean => getIndexBackend() === "sqlite";
 
@@ -86,11 +86,12 @@ const emptyIndexFile = (): SearchIndexFile => ({
 const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry => ({
   ...(() => {
     const encrypted = entry.encrypted === true;
+    const sensitive = entry.sensitive === true;
     const slug = String(entry.slug ?? "").trim().toLowerCase();
     const title = String(entry.title ?? "").trim();
     const tags = Array.isArray(entry.tags) ? entry.tags.map((value) => String(value).trim().toLowerCase()).filter(Boolean) : [];
-    const excerpt = encrypted ? "Verschlüsselter Inhalt" : String(entry.excerpt ?? "").trim();
-    const searchableText = encrypted
+    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(entry.excerpt ?? "").trim();
+    const searchableText = encrypted || sensitive
       ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
       : String(entry.searchableText ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -99,6 +100,7 @@ const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry 
       title,
       categoryId: String(entry.categoryId ?? "").trim(),
       categoryName: String(entry.categoryName ?? "").trim(),
+      sensitive,
       visibility: entry.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: Array.isArray(entry.allowedUsers)
         ? entry.allowedUsers.map((value) => String(value).trim().toLowerCase()).filter((value) => value.length > 0)
@@ -134,6 +136,7 @@ const buildEntrySignature = (
     | "title"
     | "categoryId"
     | "categoryName"
+    | "sensitive"
     | "visibility"
     | "allowedUsers"
     | "allowedGroups"
@@ -151,6 +154,7 @@ const buildEntrySignature = (
     entry.title.trim(),
     entry.categoryId.trim(),
     entry.categoryName.trim(),
+    entry.sensitive ? "1" : "0",
     entry.visibility,
     allowedUsers,
     allowedGroups,
@@ -166,8 +170,10 @@ const toSafeTimestamp = (value: string): number => {
   return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
-const toSearchableText = (summary: WikiPageSummary, content: string): string =>
-  `${summary.title}\n${summary.tags.join(" ")}\n${summary.excerpt}\n${content}`.toLowerCase().replace(/\s+/g, " ").trim();
+const toSearchableText = (summary: WikiPageSummary, content: string): string => {
+  const safeContent = summary.encrypted || summary.sensitive ? "" : content;
+  return `${summary.title}\n${summary.tags.join(" ")}\n${summary.excerpt}\n${safeContent}`.toLowerCase().replace(/\s+/g, " ").trim();
+};
 
 const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
   const isIntegrityBroken = page.integrityState === "invalid" || page.integrityState === "unverifiable";
@@ -175,12 +181,15 @@ const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
     ? "Integritätsprüfung fehlgeschlagen"
     : page.encrypted
       ? "Verschlüsselter Inhalt"
+      : page.sensitive
+        ? "Sensibler Inhalt"
       : cleanTextExcerpt(page.content).slice(0, 220);
   const summary: WikiPageSummary = {
     slug: page.slug,
     title: page.title,
     categoryId: page.categoryId,
     categoryName: page.categoryName,
+    sensitive: page.sensitive,
     visibility: page.visibility,
     allowedUsers: page.allowedUsers,
     allowedGroups: page.allowedGroups,
@@ -190,7 +199,7 @@ const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
     updatedAt: page.updatedAt
   };
 
-  const content = page.encrypted || isIntegrityBroken ? "" : page.content;
+  const content = page.encrypted || page.sensitive || isIntegrityBroken ? "" : page.content;
   return {
     ...summary,
     searchableText: toSearchableText(summary, content),
@@ -467,6 +476,7 @@ const removeSearchIndexBySlugFlat = async (slug: string): Promise<{ updated: boo
       | "title"
       | "categoryId"
       | "categoryName"
+      | "sensitive"
       | "visibility"
       | "allowedUsers"
       | "allowedGroups"

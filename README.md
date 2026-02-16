@@ -24,6 +24,10 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - Übersicht über selbst erstellte Artikel im Konto-Bereich
 - Kategorien (eine Kategorie pro Artikel)
 - Zugriff pro Artikel (`alle` oder `nur ausgewählte Benutzer/Gruppen`)
+- Sensibel-Modus pro Artikel
+  - erzwingt eingeschränkten Zugriff + Verschlüsselung
+  - Inhalt wird nicht in der Volltextsuche indiziert (nur Metadaten)
+  - Bild-Upload ist für sensible Artikel deaktiviert
 - Gruppen/Rechte-Modell (Admin-Gruppenverwaltung unter `/admin/groups`)
 - Optionale AES-256-Verschlüsselung pro Artikel
 - Integritätsschutz für Artikeldateien per HMAC-SHA256 (`CONTENT_INTEGRITY_KEY`)
@@ -196,6 +200,7 @@ docker compose up -d --build
 - `CONTENT_ENCRYPTION_KEY` nach produktivem Start nicht mehr ändern, sonst können bestehende verschlüsselte Artikel nicht mehr gelesen werden.
 - `CONTENT_INTEGRITY_KEY` nach produktivem Start nicht mehr ändern, sonst schlagen Integritätsprüfungen signierter Artikel fehl.
 - `BACKUP_ENCRYPTION_KEY` nach produktivem Start nicht leichtfertig ändern, sonst sind ältere Backups u.U. nicht mehr entschlüsselbar.
+- Sensibler Modus funktioniert nur mit `CONTENT_ENCRYPTION_KEY`; ohne Schlüssel ist die Option im Editor deaktiviert.
 - `VERSION_HISTORY_RETENTION` bestimmt, wie viele Versionen pro Artikel behalten werden.
 - `VERSION_HISTORY_COMPRESS_AFTER` bestimmt, ab welcher Position ältere Versionen komprimiert werden.
 - Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
@@ -377,6 +382,8 @@ Hinweise:
 - Bilder können direkt im Editor hochgeladen werden.
 - Pro Upload sind mehrere Dateien möglich (1-x).
 - Bei verschlüsselten Artikeln ist der Bild-Upload bewusst deaktiviert.
+- Bei sensiblen Artikeln wird Zugriff automatisch auf „nur ausgewählte Benutzer/Gruppen“ gesetzt und Verschlüsselung erzwungen.
+- Inhalte sensibler Artikel werden nicht für die Volltextsuche indexiert.
 - Dateinamen werden automatisch in eindeutige Namen umbenannt.
 - Die Seitenadresse (URL-Pfad) wird aus dem Titel automatisch erzeugt und kann bei Bedarf angepasst werden.
 - Nach dem Upload werden die Markdown-Bildlinks automatisch in den Artikelinhalt eingefügt.
