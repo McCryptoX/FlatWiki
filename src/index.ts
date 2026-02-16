@@ -9,6 +9,7 @@ import fastifyStatic from "@fastify/static";
 import { config } from "./config.js";
 import { attachCurrentUser } from "./lib/auth.js";
 import { ensureDefaultCategory } from "./lib/categoryStore.js";
+import { initBackupAutomation } from "./lib/backupStore.js";
 import { ensureDir, ensureFile } from "./lib/fileStore.js";
 import { initRuntimeSettings } from "./lib/runtimeSettingsStore.js";
 import { ensureSearchIndexConsistency } from "./lib/searchIndexStore.js";
@@ -110,6 +111,10 @@ const start = async (): Promise<void> => {
     await bootstrapDataStorage();
     await initRuntimeSettings();
     await ensureDefaultCategory();
+    initBackupAutomation({
+      info: (obj, msg) => app.log.info(obj, msg),
+      warn: (obj, msg) => app.log.warn(obj, msg)
+    });
     const indexCheck = await ensureSearchIndexConsistency();
     if (indexCheck.rebuilt) {
       app.log.info({ reason: indexCheck.reason }, "Suchindex wurde beim Start automatisch neu aufgebaut.");

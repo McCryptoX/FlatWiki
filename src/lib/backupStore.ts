@@ -94,6 +94,38 @@ interface PreparedRestoreTicket extends PreparedRestoreInfo {
   createdByUserId?: string;
 }
 
+interface LoggerLike {
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+}
+
+type BackupAutomationLastResult = "idle" | "success" | "error" | "skipped";
+
+export interface BackupRetentionResult {
+  deletedFiles: number;
+  deletedBytes: number;
+  deletedFileNames: string[];
+  remainingFiles: number;
+}
+
+export interface BackupAutomationStatus {
+  enabled: boolean;
+  intervalHours: number;
+  retentionMaxFiles: number;
+  retentionMaxAgeDays: number;
+  timerActive: boolean;
+  runningTick: boolean;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastFinishedAt?: string;
+  lastResult: BackupAutomationLastResult;
+  lastMessage: string;
+  lastError?: string;
+  lastRetentionAt?: string;
+  lastRetentionDeletedFiles: number;
+  lastRetentionDeletedBytes: number;
+}
+
 const defaultStatus = (): BackupStatus => ({
   running: false,
   phase: "idle",
@@ -117,6 +149,22 @@ let restoreStatus: RestoreStatus = defaultRestoreStatus();
 let backupPromise: Promise<void> | null = null;
 let restorePromise: Promise<void> | null = null;
 let preparedRestoreTicket: PreparedRestoreTicket | null = null;
+let backupSchedulerTimer: ReturnType<typeof setTimeout> | null = null;
+let backupSchedulerInitialized = false;
+let backupAutomationTickRunning = false;
+let backupAutomationLogger: LoggerLike | null = null;
+let backupAutomationStatus: BackupAutomationStatus = {
+  enabled: config.backupAutoEnabled,
+  intervalHours: config.backupAutoIntervalHours,
+  retentionMaxFiles: config.backupRetentionMaxFiles,
+  retentionMaxAgeDays: config.backupRetentionMaxAgeDays,
+  timerActive: false,
+  runningTick: false,
+  lastResult: "idle",
+  lastMessage: config.backupAutoEnabled ? "Wartet auf nächsten Lauf." : "Automatische Backups deaktiviert.",
+  lastRetentionDeletedFiles: 0,
+  lastRetentionDeletedBytes: 0
+};
 
 const toSafePercent = (value: number): number => Math.max(0, Math.min(100, Math.round(value)));
 
@@ -165,6 +213,14 @@ const toPreparedRestoreInfo = (ticket: PreparedRestoreTicket): PreparedRestoreIn
   createdAt: ticket.createdAt,
   expiresAt: ticket.expiresAt
 });
+
+const logAutomationInfo = (message: string, details: Record<string, unknown>): void => {
+  backupAutomationLogger?.info(details, message);
+};
+
+const logAutomationWarning = (message: string, details: Record<string, unknown>): void => {
+  backupAutomationLogger?.warn(details, message);
+};
 
 const decodeBase64Buffer = (value: string, fieldName: string): Buffer => {
   try {
@@ -690,6 +746,59 @@ const buildEncryptedBackup = async (input: {
   }
 };
 
+const runBackupRetention = async (input?: { maxFiles?: number; maxAgeDays?: number }): Promise<BackupRetentionResult> => {
+  const maxFiles = Math.max(input?.maxFiles ?? config.backupRetentionMaxFiles, 0);
+  const maxAgeDays = Math.max(input?.maxAgeDays ?? config.backupRetentionMaxAgeDays, 0);
+  const files = await listBackupFiles();
+
+  const removeSet = new Map<string, BackupFileInfo>();
+  if (maxFiles > 0 && files.length > maxFiles) {
+    for (const file of files.slice(maxFiles)) {
+      removeSet.set(file.fileName, file);
+    }
+  }
+
+  if (maxAgeDays > 0) {
+    const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const file of files) {
+      const modifiedAtMs = Date.parse(file.modifiedAt);
+      if (!Number.isFinite(modifiedAtMs)) continue;
+      if (now - modifiedAtMs > maxAgeMs) {
+        removeSet.set(file.fileName, file);
+      }
+    }
+  }
+
+  let deletedFiles = 0;
+  let deletedBytes = 0;
+  const deletedFileNames: string[] = [];
+
+  for (const [fileName, info] of removeSet.entries()) {
+    const deleted = await deleteBackupFile(fileName);
+    if (!deleted) continue;
+    deletedFiles += 1;
+    deletedBytes += info.sizeBytes;
+    deletedFileNames.push(fileName);
+  }
+
+  const remainingFiles = Math.max(files.length - deletedFiles, 0);
+  const nowIso = new Date().toISOString();
+  backupAutomationStatus = {
+    ...backupAutomationStatus,
+    lastRetentionAt: nowIso,
+    lastRetentionDeletedFiles: deletedFiles,
+    lastRetentionDeletedBytes: deletedBytes
+  };
+
+  return {
+    deletedFiles,
+    deletedBytes,
+    deletedFileNames,
+    remainingFiles
+  };
+};
+
 const runBackup = async (): Promise<void> => {
   const backupPassphrase = (process.env.BACKUP_ENCRYPTION_KEY ?? "").trim();
   if (!backupPassphrase) {
@@ -732,10 +841,15 @@ const runBackup = async (): Promise<void> => {
     });
 
     const encryptedStats = await fs.stat(outputFilePath);
+    const retentionResult = await runBackupRetention();
+    const retentionSuffix =
+      retentionResult.deletedFiles > 0
+        ? ` Retention: ${retentionResult.deletedFiles} alte Backup-Datei(en) entfernt.`
+        : "";
     updateStatus({
       running: false,
       phase: "done",
-      message: "Backup erfolgreich erstellt.",
+      message: `Backup erfolgreich erstellt.${retentionSuffix}`,
       percent: 100,
       finishedAt: new Date().toISOString(),
       archiveFileName: outputFileName,
@@ -851,6 +965,154 @@ const runRestore = async (ticket: PreparedRestoreTicket, restorePassphrase: stri
 export const getBackupStatus = (): BackupStatus => ({ ...backupStatus });
 
 export const getRestoreStatus = (): RestoreStatus => ({ ...restoreStatus });
+
+export const getBackupAutomationStatus = (): BackupAutomationStatus => ({ ...backupAutomationStatus });
+
+const clearBackupAutomationTimer = (): void => {
+  if (backupSchedulerTimer) {
+    clearTimeout(backupSchedulerTimer);
+    backupSchedulerTimer = null;
+  }
+  backupAutomationStatus = {
+    ...backupAutomationStatus,
+    timerActive: false,
+    runningTick: backupAutomationTickRunning
+  };
+};
+
+const scheduleNextBackupAutomationTick = (delayMs: number): void => {
+  clearBackupAutomationTimer();
+  const safeDelayMs = Math.max(delayMs, 30 * 1000);
+  const nextRunAt = new Date(Date.now() + safeDelayMs).toISOString();
+  backupAutomationStatus = {
+    ...backupAutomationStatus,
+    timerActive: true,
+    nextRunAt
+  };
+
+  backupSchedulerTimer = setTimeout(() => {
+    void runBackupAutomationTick();
+  }, safeDelayMs);
+  backupSchedulerTimer.unref();
+};
+
+const runBackupAutomationTick = async (): Promise<void> => {
+  if (!backupAutomationStatus.enabled) {
+    clearBackupAutomationTimer();
+    backupAutomationStatus = {
+      ...backupAutomationStatus,
+      lastResult: "skipped",
+      lastMessage: "Automatische Backups deaktiviert."
+    };
+    return;
+  }
+
+  if (backupAutomationTickRunning) {
+    scheduleNextBackupAutomationTick(60 * 1000);
+    return;
+  }
+
+  backupAutomationTickRunning = true;
+  const { nextRunAt: _ignoredNextRunAt, ...statusWithoutNextRun } = backupAutomationStatus;
+  backupAutomationStatus = {
+    ...statusWithoutNextRun,
+    runningTick: true,
+    timerActive: false,
+    lastRunAt: new Date().toISOString(),
+    lastResult: "idle",
+    lastMessage: "Automatisches Backup wird gestartet..."
+  };
+
+  const result = startBackupJob();
+  if (!result.started) {
+    backupAutomationStatus = {
+      ...backupAutomationStatus,
+      runningTick: false,
+      lastResult: "skipped",
+      lastError: result.reason ?? "Automatisches Backup übersprungen.",
+      lastMessage: result.reason ?? "Automatisches Backup übersprungen.",
+      lastFinishedAt: new Date().toISOString()
+    };
+    logAutomationWarning("Automatisches Backup übersprungen", {
+      reason: result.reason ?? "unknown"
+    });
+    backupAutomationTickRunning = false;
+    scheduleNextBackupAutomationTick(config.backupAutoIntervalHours * 60 * 60 * 1000);
+    return;
+  }
+
+  try {
+    if (backupPromise) {
+      await backupPromise;
+    }
+
+    const finalStatus = getBackupStatus();
+    const finishedAt = new Date().toISOString();
+    if (finalStatus.phase === "done") {
+      const { lastError: _ignoredError, ...statusWithoutError } = backupAutomationStatus;
+      backupAutomationStatus = {
+        ...statusWithoutError,
+        runningTick: false,
+        lastResult: "success",
+        lastMessage: finalStatus.message || "Automatisches Backup abgeschlossen.",
+        lastFinishedAt: finishedAt
+      };
+      logAutomationInfo("Automatisches Backup erfolgreich abgeschlossen", {
+        fileName: finalStatus.archiveFileName ?? "",
+        sizeBytes: finalStatus.archiveSizeBytes ?? 0
+      });
+    } else {
+      backupAutomationStatus = {
+        ...backupAutomationStatus,
+        runningTick: false,
+        lastResult: "error",
+        lastError: finalStatus.error ?? "Automatisches Backup fehlgeschlagen.",
+        lastMessage: finalStatus.error ?? finalStatus.message ?? "Automatisches Backup fehlgeschlagen.",
+        lastFinishedAt: finishedAt
+      };
+      logAutomationWarning("Automatisches Backup fehlgeschlagen", {
+        error: finalStatus.error ?? "unknown"
+      });
+    }
+  } finally {
+    backupAutomationTickRunning = false;
+    scheduleNextBackupAutomationTick(config.backupAutoIntervalHours * 60 * 60 * 1000);
+  }
+};
+
+export const initBackupAutomation = (logger?: LoggerLike): void => {
+  backupAutomationLogger = logger ?? null;
+
+  backupAutomationStatus = {
+    ...backupAutomationStatus,
+    enabled: config.backupAutoEnabled,
+    intervalHours: config.backupAutoIntervalHours,
+    retentionMaxFiles: config.backupRetentionMaxFiles,
+    retentionMaxAgeDays: config.backupRetentionMaxAgeDays,
+    lastMessage: config.backupAutoEnabled ? "Wartet auf nächsten Lauf." : "Automatische Backups deaktiviert."
+  };
+
+  if (!backupAutomationStatus.enabled) {
+    clearBackupAutomationTimer();
+    return;
+  }
+
+  if (backupSchedulerInitialized) {
+    scheduleNextBackupAutomationTick(config.backupAutoIntervalHours * 60 * 60 * 1000);
+    return;
+  }
+
+  backupSchedulerInitialized = true;
+  scheduleNextBackupAutomationTick(config.backupAutoIntervalHours * 60 * 60 * 1000);
+};
+
+export const runBackupRetentionNow = async (): Promise<BackupRetentionResult> => {
+  if (backupPromise || restorePromise) {
+    throw new Error("Retention kann während laufendem Backup/Restore nicht ausgeführt werden.");
+  }
+
+  return runBackupRetention();
+};
 
 export const getPreparedRestoreInfo = async (actorId?: string): Promise<PreparedRestoreInfo | null> => {
   await pruneExpiredPreparedRestoreTicket();

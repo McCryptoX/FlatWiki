@@ -33,12 +33,14 @@ import {
   cancelPreparedRestore,
   createRestoreUploadTarget,
   deleteBackupFile,
+  getBackupAutomationStatus,
   getBackupStatus,
   getPreparedRestoreInfo,
   getRestoreStatus,
   listBackupFiles,
   prepareRestoreUpload,
   resolveBackupFilePath,
+  runBackupRetentionNow,
   startBackupJob,
   startRestoreJob
 } from "../lib/backupStore.js";
@@ -545,6 +547,7 @@ const renderBackupManagement = (
   csrfToken: string,
   backupStatus: ReturnType<typeof getBackupStatus>,
   restoreStatus: ReturnType<typeof getRestoreStatus>,
+  automationStatus: ReturnType<typeof getBackupAutomationStatus>,
   preparedRestore: Awaited<ReturnType<typeof getPreparedRestoreInfo>>,
   files: Awaited<ReturnType<typeof listBackupFiles>>,
   hasBackupKey: boolean
@@ -570,6 +573,25 @@ const renderBackupManagement = (
           ? "Fertig"
           : "Bereit";
   const operationRunning = backupStatus.running || restoreStatus.running;
+  const automationStateLabel = automationStatus.enabled ? "Aktiv" : "Deaktiviert";
+  const automationLastResultLabel =
+    automationStatus.lastResult === "success"
+      ? "Erfolgreich"
+      : automationStatus.lastResult === "error"
+        ? "Fehler"
+        : automationStatus.lastResult === "skipped"
+          ? "Übersprungen"
+          : "Noch kein Lauf";
+  const retentionHintParts: string[] = [];
+  if (automationStatus.retentionMaxFiles > 0) {
+    retentionHintParts.push(`max. ${automationStatus.retentionMaxFiles} Dateien`);
+  }
+  if (automationStatus.retentionMaxAgeDays > 0) {
+    retentionHintParts.push(`max. ${automationStatus.retentionMaxAgeDays} Tage`);
+  }
+  if (retentionHintParts.length < 1) {
+    retentionHintParts.push("deaktiviert");
+  }
 
   const latestFiles = files
     .slice(0, 50)
@@ -636,6 +658,38 @@ const renderBackupManagement = (
 
   return `
     <section class="content-wrap stack large admin-backup-shell" data-backup-admin data-csrf="${escapeHtml(csrfToken)}">
+      <div class="admin-index-panel">
+        <h2>Automatische Backups & Retention</h2>
+        <dl class="admin-index-meta" data-backup-auto>
+          <dt>Status</dt>
+          <dd data-auto-state>${escapeHtml(automationStateLabel)}</dd>
+          <dt>Intervall</dt>
+          <dd data-auto-interval>${automationStatus.intervalHours} Stunde(n)</dd>
+          <dt>Nächster Lauf</dt>
+          <dd data-auto-next-run>${automationStatus.nextRunAt ? escapeHtml(formatDate(automationStatus.nextRunAt)) : "-"}</dd>
+          <dt>Letzter Lauf</dt>
+          <dd data-auto-last-run>${automationStatus.lastRunAt ? escapeHtml(formatDate(automationStatus.lastRunAt)) : "-"}</dd>
+          <dt>Letztes Ergebnis</dt>
+          <dd data-auto-last-result>${escapeHtml(automationLastResultLabel)}</dd>
+          <dt>Retention</dt>
+          <dd data-auto-retention>${escapeHtml(retentionHintParts.join(", "))}</dd>
+          <dt>Zuletzt bereinigt</dt>
+          <dd data-auto-last-retention>
+            ${
+              automationStatus.lastRetentionAt
+                ? `${escapeHtml(formatDate(automationStatus.lastRetentionAt))} (${automationStatus.lastRetentionDeletedFiles} gelöscht)`
+                : "-"
+            }
+          </dd>
+        </dl>
+        <p class="muted-note" data-auto-message>${escapeHtml(automationStatus.lastMessage)}</p>
+        <p class="admin-index-error" data-auto-error ${automationStatus.lastError ? "" : "hidden"}>${escapeHtml(automationStatus.lastError ?? "")}</p>
+        <form method="post" action="/admin/backups/retention/run" class="action-row">
+          <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
+          <button type="submit" class="secondary" ${operationRunning ? "disabled" : ""}>Retention jetzt ausführen</button>
+        </form>
+      </div>
+
       <div class="admin-index-panel">
         <h2>Backup starten</h2>
         <p class="muted-note">Erstellt ein verschlüsseltes Daten-Backup inkl. Prüfsumme im Ordner <code>data/backups</code>.</p>
@@ -1316,6 +1370,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const backupStatus = getBackupStatus();
     const restoreStatus = getRestoreStatus();
+    const automationStatus = getBackupAutomationStatus();
     const files = await listBackupFiles();
     const preparedRestore = await getPreparedRestoreInfo(request.currentUser?.id);
     const hasBackupKey = Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim());
@@ -1326,7 +1381,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         description: "Verschlüsselte Datensicherungen erstellen und verwalten.",
         active: "backups"
       })}
-      ${renderBackupManagement(request.csrfToken ?? "", backupStatus, restoreStatus, preparedRestore, files, hasBackupKey)}
+      ${renderBackupManagement(request.csrfToken ?? "", backupStatus, restoreStatus, automationStatus, preparedRestore, files, hasBackupKey)}
     `;
 
     return reply.type("text/html").send(
@@ -1337,7 +1392,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         csrfToken: request.csrfToken,
         notice: query.notice,
         error: query.error,
-        scripts: ["/admin-backups.js?v=2"]
+        scripts: ["/admin-backups.js?v=3"]
       })
     );
   });
@@ -1366,6 +1421,40 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     });
 
     return reply.redirect("/admin/backups?notice=Backup+gel%C3%B6scht.");
+  });
+
+  app.post("/admin/backups/retention/run", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const backupStatus = getBackupStatus();
+    const restoreStatus = getRestoreStatus();
+    if (backupStatus.running || restoreStatus.running) {
+      return reply.redirect("/admin/backups?error=Retention+ist+w%C3%A4hrend+Backup/Restore+nicht+m%C3%B6glich.");
+    }
+
+    try {
+      const retention = await runBackupRetentionNow();
+
+      await writeAuditLog({
+        action: "admin_backup_retention_run",
+        actorId: request.currentUser?.id,
+        details: {
+          deletedFiles: retention.deletedFiles,
+          deletedBytes: retention.deletedBytes
+        }
+      });
+
+      const notice =
+        retention.deletedFiles > 0
+          ? `${retention.deletedFiles} Backup-Datei(en) durch Retention gelöscht.`
+          : "Retention ausgeführt. Keine Datei wurde gelöscht.";
+      return reply.redirect(`/admin/backups?notice=${encodeURIComponent(notice)}`);
+    } catch (error) {
+      return reply.redirect(`/admin/backups?error=${encodeURIComponent(error instanceof Error ? error.message : "Retention fehlgeschlagen.")}`);
+    }
   });
 
   app.post("/admin/backups/restore/prepare", { preHandler: [requireAdmin] }, async (request, reply) => {
@@ -1547,6 +1636,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       ok: true,
       status: getBackupStatus(),
       restoreStatus: getRestoreStatus(),
+      automation: getBackupAutomationStatus(),
       preparedRestore,
       files,
       hasBackupKey
@@ -1579,6 +1669,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       reason: result.reason,
       status: result.status,
       restoreStatus: getRestoreStatus(),
+      automation: getBackupAutomationStatus(),
       preparedRestore: await getPreparedRestoreInfo(request.currentUser?.id),
       hasBackupKey: Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim()),
       files

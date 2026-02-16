@@ -32,6 +32,10 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     CONTENT_ENCRYPTION_KEY: generateHex(32),
     CONTENT_INTEGRITY_KEY: generateHex(32),
     BACKUP_ENCRYPTION_KEY: generateHex(32),
+    BACKUP_AUTO_ENABLED: "false",
+    BACKUP_AUTO_INTERVAL_HOURS: "24",
+    BACKUP_RETENTION_MAX_FILES: "30",
+    BACKUP_RETENTION_MAX_AGE_DAYS: "0",
     SESSION_TTL_HOURS: "12",
     VERSION_HISTORY_RETENTION: "150",
     VERSION_HISTORY_COMPRESS_AFTER: "30",
@@ -59,6 +63,10 @@ const hasExternalConfig = [
   "CONTENT_ENCRYPTION_KEY",
   "CONTENT_INTEGRITY_KEY",
   "BACKUP_ENCRYPTION_KEY",
+  "BACKUP_AUTO_ENABLED",
+  "BACKUP_AUTO_INTERVAL_HOURS",
+  "BACKUP_RETENTION_MAX_FILES",
+  "BACKUP_RETENTION_MAX_AGE_DAYS",
   "BOOTSTRAP_ADMIN_PASSWORD",
   "BOOTSTRAP_ADMIN_USERNAME",
   "HOST",
@@ -88,6 +96,14 @@ const parseNonNegativeInt = (value: string | undefined, fallback: number): numbe
   if (value === undefined) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
+const parseBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
 };
 
 const parseIndexBackend = (value: string | undefined): IndexBackend => {
@@ -123,6 +139,10 @@ export const config = {
   cookieSecret: process.env.COOKIE_SECRET ?? "dev-only-change-cookie-secret-please",
   isProduction: process.env.NODE_ENV === "production",
   sessionTtlHours: parsePositiveInt(process.env.SESSION_TTL_HOURS, 12),
+  backupAutoEnabled: parseBoolean(process.env.BACKUP_AUTO_ENABLED, false),
+  backupAutoIntervalHours: parsePositiveInt(process.env.BACKUP_AUTO_INTERVAL_HOURS, 24),
+  backupRetentionMaxFiles: parseNonNegativeInt(process.env.BACKUP_RETENTION_MAX_FILES, 30),
+  backupRetentionMaxAgeDays: parseNonNegativeInt(process.env.BACKUP_RETENTION_MAX_AGE_DAYS, 0),
   versionHistoryRetention: parsePositiveInt(process.env.VERSION_HISTORY_RETENTION, 150),
   versionHistoryCompressAfter: parseNonNegativeInt(process.env.VERSION_HISTORY_COMPRESS_AFTER, 30),
   wikiTitle: process.env.WIKI_TITLE ?? "FlatWiki",

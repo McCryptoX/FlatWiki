@@ -19,6 +19,15 @@
   const restoreTime = root.querySelector("[data-restore-time]");
   const restoreSource = root.querySelector("[data-restore-source]");
   const restoreError = root.querySelector("[data-restore-error]");
+  const autoState = root.querySelector("[data-auto-state]");
+  const autoInterval = root.querySelector("[data-auto-interval]");
+  const autoNextRun = root.querySelector("[data-auto-next-run]");
+  const autoLastRun = root.querySelector("[data-auto-last-run]");
+  const autoLastResult = root.querySelector("[data-auto-last-result]");
+  const autoRetention = root.querySelector("[data-auto-retention]");
+  const autoLastRetention = root.querySelector("[data-auto-last-retention]");
+  const autoMessage = root.querySelector("[data-auto-message]");
+  const autoError = root.querySelector("[data-auto-error]");
 
   const csrf = root.getAttribute("data-csrf") || "";
 
@@ -113,6 +122,57 @@
     }
   };
 
+  const renderAutomationStatus = (status) => {
+    if (
+      !autoState ||
+      !autoInterval ||
+      !autoNextRun ||
+      !autoLastRun ||
+      !autoLastResult ||
+      !autoRetention ||
+      !autoLastRetention ||
+      !autoMessage ||
+      !autoError
+    ) {
+      return;
+    }
+
+    const current = status || {};
+    autoState.textContent = current.enabled ? "Aktiv" : "Deaktiviert";
+    autoInterval.textContent = `${Number(current.intervalHours || 0)} Stunde(n)`;
+    autoNextRun.textContent = formatDate(current.nextRunAt);
+    autoLastRun.textContent = formatDate(current.lastRunAt);
+    const lastResultLabel =
+      current.lastResult === "success"
+        ? "Erfolgreich"
+        : current.lastResult === "error"
+          ? "Fehler"
+          : current.lastResult === "skipped"
+            ? "Übersprungen"
+            : "Noch kein Lauf";
+    autoLastResult.textContent = lastResultLabel;
+    const retentionParts = [];
+    if (Number(current.retentionMaxFiles || 0) > 0) {
+      retentionParts.push(`max. ${Number(current.retentionMaxFiles)} Dateien`);
+    }
+    if (Number(current.retentionMaxAgeDays || 0) > 0) {
+      retentionParts.push(`max. ${Number(current.retentionMaxAgeDays)} Tage`);
+    }
+    autoRetention.textContent = retentionParts.length > 0 ? retentionParts.join(", ") : "deaktiviert";
+    autoLastRetention.textContent = current.lastRetentionAt
+      ? `${formatDate(current.lastRetentionAt)} (${Number(current.lastRetentionDeletedFiles || 0)} gelöscht)`
+      : "-";
+    autoMessage.textContent = String(current.lastMessage || "");
+
+    if (current.lastError) {
+      autoError.textContent = String(current.lastError);
+      autoError.hidden = false;
+    } else {
+      autoError.textContent = "";
+      autoError.hidden = true;
+    }
+  };
+
   const renderFiles = (files, disableDelete) => {
     const rows = Array.isArray(files) ? files : [];
     if (rows.length < 1) {
@@ -164,6 +224,7 @@
       if (!payload || !payload.status) return;
 
       renderRestoreStatus(payload.restoreStatus);
+      renderAutomationStatus(payload.automation);
       const hasBackupKey = Boolean(payload.hasBackupKey);
       renderBackupStatus(payload.status, hasBackupKey);
       renderFiles(payload.files, Boolean(payload.status?.running) || Boolean(payload.restoreStatus?.running));
@@ -197,6 +258,9 @@
       const payload = await response.json().catch(() => null);
       if (payload && payload.restoreStatus) {
         renderRestoreStatus(payload.restoreStatus);
+      }
+      if (payload && payload.automation) {
+        renderAutomationStatus(payload.automation);
       }
       if (payload && payload.status) {
         renderBackupStatus(payload.status, Boolean(payload.hasBackupKey));

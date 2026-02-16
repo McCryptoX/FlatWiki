@@ -29,6 +29,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Integritätsschutz für Artikeldateien per HMAC-SHA256 (`CONTENT_INTEGRITY_KEY`)
 - Verschlüsselte Artikel werden ohne Klartext-Inhalt indiziert (nur Metadaten wie Titel/Tags)
 - Versionshistorie pro Artikel mit Restore (Admin)
+  - Diff-Ansicht zwischen Versionen und aktuellem Stand
 - Automatische Historienpflege pro Artikel
   - Retention-Limit (ältere Versionen werden gelöscht)
   - Gzip-Kompression älterer Versionen (`.json.gz`)
@@ -57,6 +58,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Beim Löschen eines Artikels: automatische Entfernung nicht mehr referenzierter Upload-Bilder
 - Verschlüsselte Backups mit separatem Backup-Schlüssel (`scripts/backup-encrypted.sh`, `scripts/backup-decrypt.sh`)
 - Admin-Backupverwaltung (`/admin/backups`) mit 1-Klick-Start, Progressbar, Download, Löschen und Restore-Wizard (Upload + Prüfung + explizite Bestätigung)
+  - geplante automatische Backups (Intervall) + Retention (Anzahl/Alter)
 - Admin-Kategorienverwaltung (`/admin/categories`)
 - Admin-Gruppenverwaltung (`/admin/groups`)
 - Visueller Setup-Assistent beim ersten Start (`/setup`)
@@ -269,6 +271,10 @@ Optional:
 - `INDEX_BACKEND` (`flat` oder `sqlite`, Standard: `flat`)
 - `VERSION_HISTORY_RETENTION` (Standard: `150`)
 - `VERSION_HISTORY_COMPRESS_AFTER` (Standard: `30`, `0` = alles komprimieren)
+- `BACKUP_AUTO_ENABLED` (`true`/`false`, Standard: `false`)
+- `BACKUP_AUTO_INTERVAL_HOURS` (Standard: `24`)
+- `BACKUP_RETENTION_MAX_FILES` (Standard: `30`, `0` = unbegrenzt)
+- `BACKUP_RETENTION_MAX_AGE_DAYS` (Standard: `0`, `0` = deaktiviert)
 
 Hybrid-Modus:
 
@@ -289,6 +295,16 @@ git status --short
 ```
 
 ## Backup und Restore (verschlüsselt)
+
+Automatische Backups + Retention:
+
+- Steuerung über `config.env`:
+  - `BACKUP_AUTO_ENABLED=true`
+  - `BACKUP_AUTO_INTERVAL_HOURS=24`
+  - `BACKUP_RETENTION_MAX_FILES=30`
+  - `BACKUP_RETENTION_MAX_AGE_DAYS=0`
+- Status, letzter Lauf und nächster Lauf werden unter `/admin/backups` angezeigt.
+- Retention kann dort zusätzlich per Button **„Retention jetzt ausführen“** manuell gestartet werden.
 
 Backup im Admin-Menü:
 
@@ -323,6 +339,16 @@ Hinweise:
 - Backup-Schlüssel getrennt vom Content-Key halten.
 - Bei vorhandener `.sha256` wird die Prüfsumme beim Restore verifiziert.
 - Während eines laufenden Backup/Restore sind konkurrierende Aktionen gesperrt.
+
+## Versionshistorie und Diff
+
+- Historie pro Artikel: `/wiki/<seitenadresse>/history`
+- Einzelne Version ansehen: `/wiki/<seitenadresse>/history/<versionId>`
+- Diff anzeigen: `/wiki/<seitenadresse>/history/<versionId>/diff`
+- Im Diff kann der Vergleichspartner gewählt werden:
+  - aktueller Stand
+  - andere gespeicherte Versionen
+- Admins können aus der Historie direkt auf eine ältere Version zurücksetzen.
 
 ## Artikel-Editor
 

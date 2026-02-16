@@ -1423,6 +1423,14 @@ export const getPageVersionRawContent = async (slugInput: string, versionId: str
   return version?.fileContent ?? null;
 };
 
+export const getCurrentPageRawContent = async (slugInput: string): Promise<string | null> => {
+  const slug = slugInput.trim().toLowerCase();
+  if (!isValidSlug(slug)) return null;
+  const existingPath = await resolveExistingPagePath(slug);
+  if (!existingPath) return null;
+  return await readTextFile(existingPath);
+};
+
 export const restorePageVersion = async (input: {
   slug: string;
   versionId: string;

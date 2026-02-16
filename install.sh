@@ -50,6 +50,10 @@ ensure_key "PASSWORD_PEPPER" "$(random_hex 24)" || true
 ensure_key "CONTENT_ENCRYPTION_KEY" "$(random_hex 32)" || true
 ensure_key "CONTENT_INTEGRITY_KEY" "$(random_hex 32)" || true
 ensure_key "BACKUP_ENCRYPTION_KEY" "$(random_hex 32)" || true
+ensure_key "BACKUP_AUTO_ENABLED" "false" || true
+ensure_key "BACKUP_AUTO_INTERVAL_HOURS" "24" || true
+ensure_key "BACKUP_RETENTION_MAX_FILES" "30" || true
+ensure_key "BACKUP_RETENTION_MAX_AGE_DAYS" "0" || true
 ensure_key "SESSION_TTL_HOURS" "12" || true
 ensure_key "WIKI_TITLE" "FlatWiki" || true
 ensure_key "INDEX_BACKEND" "flat" || true
