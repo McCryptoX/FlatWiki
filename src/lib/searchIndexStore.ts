@@ -89,9 +89,25 @@ const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry 
     const sensitive = entry.sensitive === true;
     const slug = String(entry.slug ?? "").trim().toLowerCase();
     const title = String(entry.title ?? "").trim();
-    const tags = Array.isArray(entry.tags) ? entry.tags.map((value) => String(value).trim().toLowerCase()).filter(Boolean) : [];
-    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(entry.excerpt ?? "").trim();
-    const searchableText = encrypted || sensitive
+    const securityProfile =
+      entry.securityProfile === "confidential"
+        ? "confidential"
+        : entry.securityProfile === "sensitive"
+          ? "sensitive"
+          : sensitive
+            ? "sensitive"
+            : "standard";
+    const rawTags = Array.isArray(entry.tags) ? entry.tags.map((value) => String(value).trim().toLowerCase()).filter(Boolean) : [];
+    const tags = securityProfile === "confidential" ? [] : rawTags;
+    const excerpt =
+      securityProfile === "confidential"
+        ? "Vertraulicher Inhalt"
+        : encrypted
+          ? "Verschlüsselter Inhalt"
+          : sensitive
+            ? "Sensibler Inhalt"
+            : String(entry.excerpt ?? "").trim();
+    const searchableText = encrypted || sensitive || securityProfile === "confidential"
       ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
       : String(entry.searchableText ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -100,14 +116,7 @@ const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry 
       title,
       categoryId: String(entry.categoryId ?? "").trim(),
       categoryName: String(entry.categoryName ?? "").trim(),
-      securityProfile:
-        entry.securityProfile === "confidential"
-          ? "confidential"
-          : entry.securityProfile === "sensitive"
-            ? "sensitive"
-            : sensitive
-              ? "sensitive"
-              : "standard",
+      securityProfile,
       sensitive,
       visibility: entry.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: Array.isArray(entry.allowedUsers)
@@ -184,6 +193,9 @@ const toSafeTimestamp = (value: string): number => {
 };
 
 const toSearchableText = (summary: WikiPageSummary, content: string): string => {
+  if (summary.securityProfile === "confidential") {
+    return `${summary.title}\nvertraulicher inhalt`.toLowerCase().replace(/\s+/g, " ").trim();
+  }
   const safeContent = summary.encrypted || summary.sensitive ? "" : content;
   return `${summary.title}\n${summary.tags.join(" ")}\n${summary.excerpt}\n${safeContent}`.toLowerCase().replace(/\s+/g, " ").trim();
 };
@@ -208,7 +220,7 @@ const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
     allowedUsers: page.allowedUsers,
     allowedGroups: page.allowedGroups,
     encrypted: page.encrypted,
-    tags: page.tags,
+    tags: page.securityProfile === "confidential" ? [] : page.tags,
     excerpt,
     updatedAt: page.updatedAt,
     updatedBy: page.updatedBy

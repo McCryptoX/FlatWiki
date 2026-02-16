@@ -164,6 +164,7 @@
     const titleInput = editorShell.querySelector('input[name="title"][data-title-input], input[name="title"]');
     const slugInput = editorShell.querySelector('input[name="slug"][data-slug-input], input[name="slug"]');
     const tagsInput = editorShell.querySelector('input[name="tags"]');
+    const tagsNote = editorShell.querySelector("[data-tags-note]");
     const uploadForm = editorShell.querySelector(".image-upload-form");
     const output = editorShell.querySelector(".upload-markdown-output");
     const encryptionToggle = editorShell.querySelector('input[name="encrypted"][data-encrypted-toggle], input[name="encrypted"]');
@@ -214,6 +215,7 @@
     const previewEndpoint = editorShell.dataset.previewEndpoint || "/api/markdown/preview";
     const pageSlug = (editorShell.dataset.pageSlug || "").trim().toLowerCase();
     const initialTemplateId = (editorShell.dataset.initialTemplateId || "").trim();
+    const uiMode = String(editorShell.dataset.uiMode || "advanced").trim().toLowerCase() === "simple" ? "simple" : "advanced";
     const uploadDisabledMessage = "Bild-Upload ist für verschlüsselte Artikel deaktiviert.";
 
     const encryptionAvailable = !(encryptionToggle instanceof HTMLInputElement) || !encryptionToggle.disabled;
@@ -364,9 +366,11 @@
     const setSecurityProfileNoteText = () => {
       const text =
         selectedSecurityProfile === "confidential"
-          ? "Vertraulich: Zugriff nur ausgewählt und immer verschlüsselt. Für hochkritische Inhalte."
+          ? "Vertraulich: Zugriff nur ausgewählt und immer verschlüsselt. Tags werden entfernt und die Seite erscheint nicht in Live-Vorschlägen."
           : selectedSecurityProfile === "sensitive"
-            ? "Sensibel: Zugriff nur ausgewählt und immer verschlüsselt."
+            ? uiMode === "simple"
+              ? "Sensibel ist aktiv (Bestandsartikel). Im Einfach-Modus kannst du zu Standard oder Vertraulich wechseln."
+              : "Sensibel: Zugriff nur ausgewählt und immer verschlüsselt. Metadaten bleiben in Suche/Listen sichtbar."
             : "Standard: freie Auswahl von Zugriff und Verschlüsselung.";
       for (const element of securityProfileNotes) {
         if (element instanceof HTMLElement) {
@@ -401,6 +405,17 @@
 
       if (securityProfileInput instanceof HTMLInputElement) {
         securityProfileInput.value = selectedSecurityProfile;
+      }
+
+      if (tagsInput instanceof HTMLInputElement) {
+        const confidential = selectedSecurityProfile === "confidential";
+        if (confidential) {
+          tagsInput.value = "";
+        }
+        tagsInput.disabled = confidential;
+      }
+      if (tagsNote instanceof HTMLElement) {
+        tagsNote.hidden = selectedSecurityProfile !== "confidential";
       }
 
       if (wizardVisibilitySelect instanceof HTMLSelectElement) {

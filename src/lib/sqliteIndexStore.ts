@@ -235,12 +235,28 @@ const parseArray = (raw: unknown, lowercase = true): string[] => {
 const normalizeEntry = (entry: SqliteIndexEntry): SqliteIndexEntry => ({
   ...(() => {
     const title = String(entry.title ?? "").trim();
-    const tags = [...entry.tags].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
     const sensitive = entry.sensitive === true;
     const encrypted = entry.encrypted === true;
-    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(entry.excerpt ?? "").trim();
+    const securityProfile =
+      entry.securityProfile === "confidential"
+        ? "confidential"
+        : entry.securityProfile === "sensitive"
+          ? "sensitive"
+          : sensitive
+            ? "sensitive"
+            : "standard";
+    const rawTags = [...entry.tags].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
+    const tags = securityProfile === "confidential" ? [] : rawTags;
+    const excerpt =
+      securityProfile === "confidential"
+        ? "Vertraulicher Inhalt"
+        : encrypted
+          ? "Verschlüsselter Inhalt"
+          : sensitive
+            ? "Sensibler Inhalt"
+            : String(entry.excerpt ?? "").trim();
     const searchableText =
-      encrypted || sensitive
+      encrypted || sensitive || securityProfile === "confidential"
         ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
         : String(entry.searchableText ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -249,14 +265,7 @@ const normalizeEntry = (entry: SqliteIndexEntry): SqliteIndexEntry => ({
       title,
       categoryId: String(entry.categoryId ?? "").trim() || "default",
       categoryName: String(entry.categoryName ?? "").trim() || "Allgemein",
-      securityProfile:
-        entry.securityProfile === "confidential"
-          ? "confidential"
-          : entry.securityProfile === "sensitive"
-            ? "sensitive"
-            : sensitive
-              ? "sensitive"
-              : "standard",
+      securityProfile,
       sensitive,
       visibility: entry.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: [...entry.allowedUsers].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
@@ -277,10 +286,26 @@ const mapRowToEntry = (row: Record<string, unknown>): SqliteIndexEntry => {
   const slug = String(row.slug ?? "").trim().toLowerCase();
   const sensitive = toInt(row.sensitive) === 1;
   const encrypted = toInt(row.encrypted) === 1;
-  const tags = parseArray(row.tags);
-  const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(row.excerpt ?? "").trim();
+  const securityProfile =
+    row.securityProfile === "confidential"
+      ? "confidential"
+      : row.securityProfile === "sensitive"
+        ? "sensitive"
+        : sensitive
+          ? "sensitive"
+          : "standard";
+  const rawTags = parseArray(row.tags);
+  const tags = securityProfile === "confidential" ? [] : rawTags;
+  const excerpt =
+    securityProfile === "confidential"
+      ? "Vertraulicher Inhalt"
+      : encrypted
+        ? "Verschlüsselter Inhalt"
+        : sensitive
+          ? "Sensibler Inhalt"
+          : String(row.excerpt ?? "").trim();
   const searchableText =
-    encrypted || sensitive
+    encrypted || sensitive || securityProfile === "confidential"
       ? `${title}\n${tags.join(" ")}\n${excerpt}`.toLowerCase().replace(/\s+/g, " ").trim()
       : String(row.searchableText ?? `${title}\n${tags.join(" ")}\n${excerpt}`)
           .toLowerCase()
@@ -292,14 +317,7 @@ const mapRowToEntry = (row: Record<string, unknown>): SqliteIndexEntry => {
     title: title || slug,
     categoryId: String(row.categoryId ?? "").trim() || "default",
     categoryName: String(row.categoryName ?? "").trim() || "Allgemein",
-    securityProfile:
-      row.securityProfile === "confidential"
-        ? "confidential"
-        : row.securityProfile === "sensitive"
-          ? "sensitive"
-          : sensitive
-            ? "sensitive"
-            : "standard",
+    securityProfile,
     sensitive,
     visibility: row.visibility === "restricted" ? "restricted" : "all",
     allowedUsers: parseArray(row.allowedUsers),

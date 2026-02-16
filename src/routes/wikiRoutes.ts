@@ -12,6 +12,7 @@ import { config } from "../config.js";
 import { ensureDir } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
+import { getUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
 import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
 import { buildUnifiedDiff } from "../lib/textDiff.js";
 import { listUsers } from "../lib/userStore.js";
@@ -382,6 +383,17 @@ const applySecurityProfileToSettings = (
   };
 };
 
+const resolveSecurityProfileForUiMode = (input: {
+  requested: SecurityProfile;
+  uiMode: UiMode;
+  existing?: SecurityProfile;
+}): SecurityProfile => {
+  if (input.uiMode === "advanced") return input.requested;
+  if (input.requested !== "sensitive") return input.requested;
+  if (input.existing === "sensitive") return "sensitive";
+  return "confidential";
+};
+
 const renderSearchResultList = (
   pages: WikiPageSummary[],
   searchContext: {
@@ -490,12 +502,14 @@ const renderEditorForm = (params: {
   selectedTemplateId?: string;
   encrypted: boolean;
   encryptionAvailable: boolean;
+  uiMode: UiMode;
+  showSensitiveProfileOption: boolean;
 }): string => `
   <section class="content-wrap editor-shell" data-preview-endpoint="/api/markdown/preview" data-csrf="${escapeHtml(
     params.csrfToken
   )}" data-page-slug="${escapeHtml(params.slug)}" data-editor-mode="${params.mode}" data-security-profile="${escapeHtml(
     params.securityProfile
-  )}" data-initial-template-id="${escapeHtml(params.selectedTemplateId ?? "")}">
+  )}" data-ui-mode="${escapeHtml(params.uiMode)}" data-initial-template-id="${escapeHtml(params.selectedTemplateId ?? "")}">
     <h1>${params.mode === "new" ? "Neue Seite" : "Seite bearbeiten"}</h1>
     <div class="editor-grid">
       <form method="post" action="${escapeHtml(params.action)}" class="stack large">
@@ -535,15 +549,23 @@ const renderEditorForm = (params: {
                   <label class="wizard-heading">Sicherheitsprofil</label>
                   <div class="wizard-sensitivity-row" data-security-profile-picker>
                     <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="standard">Standard</button>
-                    <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
-                      params.encryptionAvailable ? "" : "disabled"
-                    }>Sensibel</button>
+                    ${
+                      params.showSensitiveProfileOption
+                        ? `<button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
+                            params.encryptionAvailable ? "" : "disabled"
+                          }>Sensibel</button>`
+                        : ""
+                    }
                     <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="confidential" ${
                       params.encryptionAvailable ? "" : "disabled"
                     }>Vertraulich</button>
                   </div>
                   <p class="muted-note small" data-security-profile-note>
-                    Sensibel und Vertraulich erzwingen eingeschränkten Zugriff und Verschlüsselung.
+                    ${
+                      params.showSensitiveProfileOption
+                        ? "Standard: frei. Sensibel: eingeschränkt + verschlüsselt. Vertraulich: zusätzlich ohne Tags und ohne Live-Vorschläge."
+                        : "Standard: frei. Vertraulich: eingeschränkt + verschlüsselt, ohne Tags und ohne Live-Vorschläge."
+                    }
                   </p>
                 </div>
 
@@ -570,7 +592,12 @@ const renderEditorForm = (params: {
                   defaultTitle: template.defaultTitle,
                   defaultTags: template.defaultTags,
                   defaultContent: template.defaultContent,
-                  securityProfile: template.sensitivity === "sensitive" ? "sensitive" : "standard"
+                  securityProfile:
+                    template.sensitivity === "sensitive"
+                      ? params.showSensitiveProfileOption
+                        ? "sensitive"
+                        : "confidential"
+                      : "standard"
                 }))
               )}</script>
             `
@@ -579,18 +606,32 @@ const renderEditorForm = (params: {
         <label>Titel
           <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" data-title-input />
         </label>
-        <label>Sicherheitsprofil
-          <div class="wizard-sensitivity-row" data-security-profile-picker>
-            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="standard">Standard</button>
-            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
-              params.encryptionAvailable ? "" : "disabled"
-            }>Sensibel</button>
-            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="confidential" ${
-              params.encryptionAvailable ? "" : "disabled"
-            }>Vertraulich</button>
-          </div>
-        </label>
-        <p class="muted-note small" data-security-profile-note>Standard für normale Inhalte, Sensibel/Vertraulich für kritische Inhalte.</p>
+        ${
+          params.mode === "edit"
+            ? `
+              <label>Sicherheitsprofil
+                <div class="wizard-sensitivity-row" data-security-profile-picker>
+                  <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="standard">Standard</button>
+                  ${
+                    params.showSensitiveProfileOption
+                      ? `<button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
+                          params.encryptionAvailable ? "" : "disabled"
+                        }>Sensibel</button>`
+                      : ""
+                  }
+                  <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="confidential" ${
+                    params.encryptionAvailable ? "" : "disabled"
+                  }>Vertraulich</button>
+                </div>
+              </label>
+              <p class="muted-note small" data-security-profile-note>${
+                params.showSensitiveProfileOption
+                  ? "Standard: frei. Sensibel: eingeschränkt + verschlüsselt. Vertraulich: zusätzlich ohne Tags und ohne Live-Vorschläge."
+                  : "Standard: frei. Vertraulich: eingeschränkt + verschlüsselt, ohne Tags und ohne Live-Vorschläge."
+              }</p>
+            `
+            : ""
+        }
         ${
           params.encryptionAvailable
             ? ""
@@ -680,7 +721,8 @@ const renderEditorForm = (params: {
               </select>
             </label>
             <label>Tags (kommagetrennt)
-              <input type="text" name="tags" value="${escapeHtml(params.tags)}" />
+              <input type="text" name="tags" value="${escapeHtml(params.tags)}" data-tags-input />
+              <span class="muted-note small" data-tags-note hidden>Bei Vertraulich werden Tags aus Datenschutzgründen nicht gespeichert.</span>
             </label>
             <label class="checkline standalone-checkline">
               <input type="checkbox" name="encrypted" value="1" data-encrypted-toggle ${params.encrypted ? "checked" : ""} ${
@@ -1038,6 +1080,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
   app.get("/new", { preHandler: [requireAuth] }, async (request, reply) => {
     const query = asObject(request.query);
+    const uiMode = getUiMode();
+    const showSensitiveProfileOption = uiMode === "advanced";
     const categories = await listCategories();
     const pageTemplates = await listTemplates({ includeDisabled: false });
     const defaultCategory = await getDefaultCategory();
@@ -1053,14 +1097,20 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const selectedCategoryId = readSingle(query.categoryId) || defaultCategory.id;
     const selectedTemplateId = readSingle(query.template).trim();
     const legacySensitive = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
-    const requestedSecurityProfile = normalizeSecurityProfileValue(readSingle(query.securityProfile));
+    const requestedSecurityProfile = resolveSecurityProfileForUiMode({
+      requested: normalizeSecurityProfileValue(readSingle(query.securityProfile)),
+      uiMode
+    });
     let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : "all";
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers));
     const knownGroupIds = new Set(groups.map((group) => group.id));
     const allowedGroups = normalizeIds(readMany(query.allowedGroups)).filter((groupId) => knownGroupIds.has(groupId));
     const encrypted = readSingle(query.encrypted) === "1";
     const normalizedSettings = applySecurityProfileToSettings(
-      legacySensitive && requestedSecurityProfile === "standard" ? "sensitive" : requestedSecurityProfile,
+      resolveSecurityProfileForUiMode({
+        requested: legacySensitive && requestedSecurityProfile === "standard" ? "sensitive" : requestedSecurityProfile,
+        uiMode
+      }),
       {
         visibility,
         encrypted,
@@ -1097,7 +1147,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       })),
       selectedTemplateId,
       encrypted: normalizedSettings.encrypted,
-      encryptionAvailable: Boolean(config.contentEncryptionKey)
+      encryptionAvailable: Boolean(config.contentEncryptionKey),
+      uiMode,
+      showSensitiveProfileOption
     });
 
     return reply.type("text/html").send(
@@ -1107,13 +1159,14 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=12"]
+        scripts: ["/wiki-ui.js?v=13"]
       })
     );
   });
 
   app.post("/new", { preHandler: [requireAuth] }, async (request, reply) => {
     const body = asObject(request.body);
+    const uiMode = getUiMode();
     const token = readSingle(body._csrf);
     if (!verifySessionCsrfToken(request, token)) {
       return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
@@ -1128,7 +1181,10 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
 
-    const securityProfile = normalizeSecurityProfileValue(readSingle(body.securityProfile));
+    const securityProfile = resolveSecurityProfileForUiMode({
+      requested: normalizeSecurityProfileValue(readSingle(body.securityProfile)),
+      uiMode
+    });
     let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
     const selectedCategoryId = readSingle(body.categoryId);
     const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
@@ -1278,6 +1334,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       return reply.redirect(`/wiki/${encodeURIComponent(page.slug)}?error=Verschl%C3%BCsselter+Inhalt+konnte+nicht+entschl%C3%BCsselt+werden`);
     }
 
+    const uiMode = getUiMode();
+    const showSensitiveProfileOption = uiMode === "advanced";
     const categories = await listCategories();
     const groups = await listGroups();
     const users = (await listUsers())
@@ -1290,7 +1348,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const content = readSingle(query.content) || page.content;
     const selectedCategoryId = readSingle(query.categoryId) || page.categoryId;
     const securityProfileRaw = readSingle(query.securityProfile).trim();
-    const securityProfile = securityProfileRaw ? normalizeSecurityProfileValue(securityProfileRaw) : page.securityProfile;
+    const securityProfile = resolveSecurityProfileForUiMode({
+      requested: securityProfileRaw ? normalizeSecurityProfileValue(securityProfileRaw) : page.securityProfile,
+      uiMode,
+      existing: page.securityProfile
+    });
     let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : page.visibility;
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers).length > 0 ? readMany(query.allowedUsers) : page.allowedUsers);
     const knownGroupIds = new Set(groups.map((group) => group.id));
@@ -1325,7 +1387,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       availableGroups: groups.map((group) => ({ id: group.id, name: group.name, description: group.description })),
       pageTemplates: [],
       encrypted: normalizedSettings.encrypted,
-      encryptionAvailable: Boolean(config.contentEncryptionKey)
+      encryptionAvailable: Boolean(config.contentEncryptionKey),
+      uiMode,
+      showSensitiveProfileOption
     });
 
     return reply.type("text/html").send(
@@ -1335,7 +1399,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=12"]
+        scripts: ["/wiki-ui.js?v=13"]
       })
     );
   });
@@ -1462,6 +1526,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
   app.post("/wiki/:slug/edit", { preHandler: [requireAuth] }, async (request, reply) => {
     const params = request.params as { slug: string };
     const body = asObject(request.body);
+    const uiMode = getUiMode();
 
     if (!verifySessionCsrfToken(request, readSingle(body._csrf))) {
       return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
@@ -1497,7 +1562,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const content = readSingle(body.content);
 
     const selectedCategoryId = readSingle(body.categoryId);
-    const securityProfile = normalizeSecurityProfileValue(readSingle(body.securityProfile));
+    const securityProfile = resolveSecurityProfileForUiMode({
+      requested: normalizeSecurityProfileValue(readSingle(body.securityProfile)),
+      uiMode,
+      existing: existing.securityProfile
+    });
     let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
     const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
     const normalizedSettings = applySecurityProfileToSettings(securityProfile, {
@@ -2311,7 +2380,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     }
 
     const suggestions = await suggestPages(q, limit, categoryId ? { categoryId } : undefined);
-    const visibleSuggestions = await filterAccessiblePageSummaries(suggestions, request.currentUser);
+    const visibleSuggestions = (await filterAccessiblePageSummaries(suggestions, request.currentUser)).filter(
+      (page) => page.securityProfile !== "confidential"
+    );
 
     return reply.send({
       ok: true,

@@ -581,7 +581,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   const requestedVisibility = normalizeVisibility(data.visibility);
 
   const title = String(data.title ?? slug).trim() || slug;
-  const tags = normalizeTags(data.tags);
+  const storedTags = normalizeTags(data.tags);
   const createdBy = String(data.createdBy ?? data.updatedBy ?? "unknown");
   const createdAt = String(data.createdAt ?? data.updatedAt ?? fallbackTimestamp);
   const updatedAt = String(data.updatedAt ?? data.createdAt ?? fallbackTimestamp);
@@ -595,6 +595,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   const sensitiveByMeta = normalizeSensitive(data.sensitive);
   const legacySensitive = sensitiveByMeta || (requestedVisibility === "restricted" && encryptedRaw);
   const securityProfile = normalizeSecurityProfile(data.securityProfile, legacySensitive ? "sensitive" : "standard");
+  const tags = securityProfile === "confidential" ? [] : storedTags;
   const sensitive = securityProfile === "standard" ? legacySensitive : true;
   const encrypted = securityProfile === "standard" ? encryptedRaw : true;
   const visibility: WikiVisibility = securityProfile === "standard" ? (sensitive ? "restricted" : requestedVisibility) : "restricted";
@@ -626,7 +627,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
         allowedUsers,
         allowedGroups,
         encrypted,
-        tags,
+        tags: storedTags,
         createdBy,
         createdAt,
         updatedAt,
@@ -785,6 +786,8 @@ const toSummary = (page: WikiPage): WikiPageSummary => ({
   excerpt:
     page.integrityState === "invalid" || page.integrityState === "unverifiable"
       ? "Integritätsprüfung fehlgeschlagen"
+      : page.securityProfile === "confidential"
+        ? "Vertraulicher Inhalt"
       : page.encrypted
         ? "Verschlüsselter Inhalt"
         : cleanTextExcerpt(page.content).slice(0, 220),
@@ -1102,7 +1105,16 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
     const encrypted = raw.encrypted === true;
     const sensitive = raw.sensitive === true || (encrypted && raw.visibility === "restricted");
     const securityProfile = normalizeSecurityProfile(raw.securityProfile, sensitive ? "sensitive" : "standard");
-    const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(raw.excerpt ?? "").trim();
+    const excerpt =
+      securityProfile === "confidential"
+        ? "Vertraulicher Inhalt"
+        : encrypted
+          ? "Verschlüsselter Inhalt"
+          : sensitive
+            ? "Sensibler Inhalt"
+            : String(raw.excerpt ?? "").trim();
+    const rawTags = Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean) : [];
+    const tags = securityProfile === "confidential" ? [] : rawTags;
     const summary: WikiPageSummary = {
       slug,
       title: String(raw.title ?? slug).trim() || slug,
@@ -1118,7 +1130,7 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
         ? raw.allowedGroups.map((entry) => String(entry).trim()).filter((entry) => entry.length > 0)
         : [],
       encrypted,
-      tags: Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean) : [],
+      tags,
       excerpt,
       updatedAt: String(raw.updatedAt ?? ""),
       updatedBy: String(raw.updatedBy ?? "unknown").trim() || "unknown"
@@ -1228,10 +1240,11 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const createdBy = existingPage?.createdBy ?? input.updatedBy;
   const updatedAt = new Date().toISOString();
 
-  const tags = input.tags
+  const requestedTags = input.tags
     .map((tag) => tag.trim().toLowerCase())
     .filter((tag) => tag.length > 0)
     .slice(0, 20);
+  const tags = securityProfile === "confidential" ? [] : requestedTags;
 
   const frontmatterData: Record<string, unknown> = {
     title,
