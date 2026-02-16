@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { createReadStream, createWriteStream } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -929,7 +929,235 @@ const renderBrokenLinksPanel = (items: Awaited<ReturnType<typeof listBrokenInter
   `;
 };
 
-type AdminNavKey = "users" | "media" | "categories" | "templates" | "groups" | "versions" | "backups" | "links" | "index";
+interface SslStatusInspection {
+  appProtocol: string;
+  appHost: string;
+  normalizedHost: string;
+  hostType: "domain" | "ip" | "localhost" | "unknown";
+  proxyDetected: boolean;
+  tlsDetected: boolean;
+  forwardedHeader: string;
+  forwardedProto: string;
+  forwardedHost: string;
+  forwardedPort: string;
+  xForwardedProto: string;
+  xForwardedHost: string;
+  xForwardedPort: string;
+  xForwardedFor: string;
+  xRealIp: string;
+  remoteAddress: string;
+}
+
+const firstForwardedToken = (value: string): string => {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0) ?? "";
+};
+
+const parseForwardedHeader = (value: string): { proto: string; host: string; port: string } => {
+  const first = firstForwardedToken(value);
+  if (!first) return { proto: "", host: "", port: "" };
+
+  const params = first
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const result = { proto: "", host: "", port: "" };
+  for (const param of params) {
+    const separator = param.indexOf("=");
+    if (separator < 1) continue;
+    const key = param.slice(0, separator).trim().toLowerCase();
+    const raw = param.slice(separator + 1).trim().replace(/^"|"$/g, "");
+    if (!raw) continue;
+    if (key === "proto") result.proto = raw.toLowerCase();
+    if (key === "host") result.host = raw;
+    if (key === "port") result.port = raw;
+  }
+
+  return result;
+};
+
+const normalizeHost = (rawHost: string): string => {
+  const first = firstForwardedToken(rawHost);
+  if (!first) return "";
+
+  const ipv6Match = first.match(/^\[([a-f0-9:]+)\](?::\d+)?$/i);
+  if (ipv6Match?.[1]) return ipv6Match[1].toLowerCase();
+
+  const chunks = first.split(":");
+  if (chunks.length > 1) {
+    return (chunks[0] ?? "").trim().toLowerCase();
+  }
+
+  return first.trim().toLowerCase();
+};
+
+const classifyHost = (host: string): "domain" | "ip" | "localhost" | "unknown" => {
+  if (!host) return "unknown";
+  if (host === "localhost" || host === "::1" || host === "127.0.0.1" || host.endsWith(".local")) return "localhost";
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host)) return "ip";
+  if (/^[a-f0-9:]+$/i.test(host) && host.includes(":")) return "ip";
+  if (host.includes(".")) return "domain";
+  return "unknown";
+};
+
+const inspectSslStatus = (request: FastifyRequest): SslStatusInspection => {
+  const forwardedHeader = readSingle(request.headers.forwarded).trim();
+  const parsedForwarded = parseForwardedHeader(forwardedHeader);
+  const xForwardedProto = firstForwardedToken(readSingle(request.headers["x-forwarded-proto"]).trim().toLowerCase());
+  const xForwardedHost = firstForwardedToken(readSingle(request.headers["x-forwarded-host"]).trim());
+  const xForwardedPort = firstForwardedToken(readSingle(request.headers["x-forwarded-port"]).trim());
+  const xForwardedFor = firstForwardedToken(readSingle(request.headers["x-forwarded-for"]).trim());
+  const xRealIp = readSingle(request.headers["x-real-ip"]).trim();
+  const xForwardedSsl = readSingle(request.headers["x-forwarded-ssl"]).trim().toLowerCase();
+
+  const appProtocol = (request.protocol || "").trim().toLowerCase();
+  const appHost = firstForwardedToken(readSingle(request.headers.host).trim());
+  const normalizedHost = normalizeHost(xForwardedHost || parsedForwarded.host || appHost);
+  const hostType = classifyHost(normalizedHost);
+
+  const proxyDetected = Boolean(xForwardedProto || xForwardedHost || xForwardedFor || xRealIp || forwardedHeader);
+  const tlsDetected =
+    appProtocol === "https" ||
+    xForwardedProto === "https" ||
+    parsedForwarded.proto === "https" ||
+    xForwardedSsl === "on";
+
+  return {
+    appProtocol,
+    appHost,
+    normalizedHost,
+    hostType,
+    proxyDetected,
+    tlsDetected,
+    forwardedHeader,
+    forwardedProto: parsedForwarded.proto,
+    forwardedHost: parsedForwarded.host,
+    forwardedPort: parsedForwarded.port,
+    xForwardedProto,
+    xForwardedHost,
+    xForwardedPort,
+    xForwardedFor,
+    xRealIp,
+    remoteAddress: request.ip
+  };
+};
+
+const renderSslState = (state: "ok" | "warn" | "manual", text: string): string => {
+  return `<span class="ssl-state ssl-state-${state}">${escapeHtml(text)}</span>`;
+};
+
+const renderSslManagement = (inspection: SslStatusInspection): string => {
+  const hasPublicDomain = inspection.hostType === "domain";
+  const warnings: string[] = [];
+
+  if (!hasPublicDomain) {
+    warnings.push("Host ist aktuell kein öffentlicher Domainname (localhost oder IP).");
+  }
+  if (hasPublicDomain && !inspection.tlsDetected) {
+    warnings.push("HTTPS wird nicht erkannt. Prüfe Reverse-Proxy/TLS-Konfiguration.");
+  }
+  if (!config.isProduction) {
+    warnings.push("NODE_ENV ist nicht auf production. Setze NODE_ENV=production für Secure-Cookies und produktive Header.");
+  }
+
+  return `
+    <section class="content-wrap stack large">
+      <div class="admin-index-panel">
+        <h2>Erkannter TLS/Proxy-Status</h2>
+        <dl class="admin-index-meta">
+          <dt>Host</dt>
+          <dd><code>${escapeHtml(inspection.normalizedHost || inspection.appHost || "-")}</code></dd>
+          <dt>Host-Typ</dt>
+          <dd>${escapeHtml(inspection.hostType)}</dd>
+          <dt>HTTPS erkannt</dt>
+          <dd>${inspection.tlsDetected ? renderSslState("ok", "Ja") : renderSslState("warn", "Nein")}</dd>
+          <dt>Proxy-Header erkannt</dt>
+          <dd>${inspection.proxyDetected ? renderSslState("ok", "Ja") : renderSslState("warn", "Nein")}</dd>
+          <dt>App-Protokoll</dt>
+          <dd><code>${escapeHtml(inspection.appProtocol || "-")}</code></dd>
+          <dt>NODE_ENV=production</dt>
+          <dd>${config.isProduction ? renderSslState("ok", "Ja") : renderSslState("warn", "Nein")}</dd>
+        </dl>
+      </div>
+
+      <div class="admin-index-panel">
+        <h2>To-do Checkliste</h2>
+        <ul class="ssl-checklist">
+          <li>${hasPublicDomain ? renderSslState("ok", "OK") : renderSslState("warn", "Offen")} Öffentliche Domain (kein localhost/IP)</li>
+          <li>${inspection.proxyDetected ? renderSslState("ok", "OK") : renderSslState("warn", "Offen")} Reverse-Proxy liefert Forwarded/X-Forwarded-Header</li>
+          <li>${inspection.tlsDetected ? renderSslState("ok", "OK") : renderSslState("warn", "Offen")} HTTPS/TLS aktiv erkannt</li>
+          <li>${config.isProduction ? renderSslState("ok", "OK") : renderSslState("warn", "Offen")} App läuft mit NODE_ENV=production</li>
+          <li>${renderSslState("manual", "Manuell")} Ports 80/443 in Firewall/Sicherheitsgruppe geöffnet</li>
+          <li>${renderSslState("manual", "Manuell")} DNS A/AAAA zeigt auf den Server</li>
+        </ul>
+        <p class="muted-note">
+          1-Klick-Setup außerhalb der App: <code>./scripts/deploy-caddy.sh --domain wiki.example.com --email admin@example.com</code>
+        </p>
+      </div>
+
+      <div class="admin-index-panel">
+        <h2>Empfangene Header (Debug, read-only)</h2>
+        <dl class="admin-index-meta">
+          <dt>Host</dt>
+          <dd><code>${escapeHtml(inspection.appHost || "-")}</code></dd>
+          <dt>X-Forwarded-Proto</dt>
+          <dd><code>${escapeHtml(inspection.xForwardedProto || "-")}</code></dd>
+          <dt>X-Forwarded-Host</dt>
+          <dd><code>${escapeHtml(inspection.xForwardedHost || "-")}</code></dd>
+          <dt>X-Forwarded-Port</dt>
+          <dd><code>${escapeHtml(inspection.xForwardedPort || "-")}</code></dd>
+          <dt>Forwarded</dt>
+          <dd><code>${escapeHtml(inspection.forwardedHeader || "-")}</code></dd>
+          <dt>Forwarded: proto</dt>
+          <dd><code>${escapeHtml(inspection.forwardedProto || "-")}</code></dd>
+          <dt>Forwarded: host</dt>
+          <dd><code>${escapeHtml(inspection.forwardedHost || "-")}</code></dd>
+          <dt>Forwarded: port</dt>
+          <dd><code>${escapeHtml(inspection.forwardedPort || "-")}</code></dd>
+          <dt>X-Forwarded-For</dt>
+          <dd><code>${escapeHtml(inspection.xForwardedFor || "-")}</code></dd>
+          <dt>X-Real-IP</dt>
+          <dd><code>${escapeHtml(inspection.xRealIp || "-")}</code></dd>
+          <dt>Erkannte Client-IP</dt>
+          <dd><code>${escapeHtml(inspection.remoteAddress || "-")}</code></dd>
+        </dl>
+      </div>
+
+      ${
+        warnings.length > 0
+          ? `
+            <div class="admin-index-panel">
+              <h2>Warnungen</h2>
+              <ul class="ssl-warning-list">
+                ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+              </ul>
+            </div>
+          `
+          : `
+            <div class="admin-index-panel">
+              <h2>Status</h2>
+              <p class="muted-note">Keine kritischen Warnungen erkannt. HTTPS/Proxy-Konfiguration wirkt konsistent.</p>
+            </div>
+          `
+      }
+    </section>
+  `;
+};
+
+type AdminNavKey =
+  | "users"
+  | "media"
+  | "categories"
+  | "templates"
+  | "groups"
+  | "versions"
+  | "backups"
+  | "links"
+  | "index"
+  | "ssl";
 
 const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> = [
   { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
@@ -939,6 +1167,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> 
   { key: "groups", href: "/admin/groups", label: "Gruppen" },
   { key: "versions", href: "/admin/versions", label: "Versionen" },
   { key: "backups", href: "/admin/backups", label: "Backups" },
+  { key: "ssl", href: "/admin/ssl", label: "TLS/SSL" },
   { key: "links", href: "/admin/links", label: "Link-Check" },
   { key: "index", href: "/admin/index", label: "Suchindex" }
 ];
@@ -1662,6 +1891,31 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         notice: query.notice,
         error: query.error,
         scripts: ["/admin-backups.js?v=3"]
+      })
+    );
+  });
+
+  app.get("/admin/ssl", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const inspection = inspectSslStatus(request);
+
+    const body = `
+      ${renderAdminHeader({
+        title: "TLS/SSL-Status",
+        description: "Read-only Prüfung von Domain-, Proxy- und HTTPS-Signalen für externes Hosting.",
+        active: "ssl"
+      })}
+      ${renderSslManagement(inspection)}
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "TLS/SSL-Status",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
       })
     );
   });

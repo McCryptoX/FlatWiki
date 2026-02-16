@@ -148,6 +148,7 @@ Wichtige Admin-Seiten:
 - **Kategorien**: Kategorien anlegen und umbenennen
 - **Gruppen**: Benutzergruppen fuer Freigaben verwalten
 - **Versionen**: Historie pruefen, Bereinigung starten
+- **TLS/SSL**: Proxy-/HTTPS-Status read-only pruefen (`/admin/ssl`)
 - **Link-Check**: defekte interne Links finden
 - **Suchindex**: Index-Backend waehlen und Neuaufbau starten
 

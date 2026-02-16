@@ -18,6 +18,9 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - Benutzer anlegen, bearbeiten, deaktivieren, löschen
   - Rollen (`admin`, `user`)
   - Passwort-Reset
+- Admin TLS/SSL-Statusseite (`/admin/ssl`)
+  - erkennt Forwarded-/Proxy-Header read-only
+  - zeigt HTTPS-Status + To-do-Checkliste
 - Benutzerkonto-Funktionen
   - eigenes Passwort ändern
   - eigene Daten exportieren (inkl. eigener Artikelübersicht + Markdown-Speicherdump)
@@ -71,6 +74,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Visueller Setup-Assistent beim ersten Start (`/setup`)
 - Sicherheitsgrundlagen: `scrypt`, CSRF, Rate-Limit, Security-Header, Audit-Log
 - Stabilitäts-Checks in CI (Merge-Konfliktmarker, TypeScript-Build, Smoketest, Docker-Build)
+- 1-Klick Domain/HTTPS-Setup-Script mit Caddy + Let's Encrypt (ACME): `scripts/deploy-caddy.sh`
 
 ## Screenshots
 
@@ -190,6 +194,44 @@ sudo apt-get install --reinstall -y docker-buildx-plugin
 docker buildx version
 docker compose up -d --build
 ```
+
+## Domain + HTTPS (Let's Encrypt / ACME)
+
+Empfohlen: FlatWiki hinter Caddy als Reverse-Proxy betreiben.
+
+Vorteile:
+
+- automatische TLS-Zertifikate via Let's Encrypt (ACME)
+- automatische Verlängerung
+- saubere Trennung: App bleibt intern, TLS liegt beim Proxy
+
+Schnellstart:
+
+```bash
+cd /pfad/zu/FlatWiki
+./scripts/deploy-caddy.sh --domain wiki.example.com --email admin@example.com
+```
+
+Das Script erzeugt lokal (nicht für Git):
+
+- `deploy/Caddyfile`
+- `docker-compose.caddy.yml`
+
+Und startet:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+```
+
+Danach prüfen:
+
+- `https://wiki.example.com`
+- Admin -> `TLS/SSL` (`/admin/ssl`)
+
+Voraussetzungen:
+
+- DNS (`A`/`AAAA`) zeigt auf den Server
+- Ports `80` und `443` sind offen
 
 ## Wichtige Hinweise
 
@@ -420,7 +462,8 @@ Hinweise:
 ├─ install.sh
 ├─ scripts/
 │  ├─ backup-encrypted.sh
-│  └─ backup-decrypt.sh
+│  ├─ backup-decrypt.sh
+│  └─ deploy-caddy.sh
 ├─ data/
 │  └─ wiki/
 ├─ public/

@@ -783,6 +783,45 @@ a[aria-disabled="true"] {
   font-weight: 500;
 }
 
+.ssl-checklist,
+.ssl-warning-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ssl-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.2rem;
+  padding: 0.1rem 0.45rem;
+  margin-right: 0.45rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+}
+
+.ssl-state-ok {
+  color: #0f5a43;
+  background: #d9f3e9;
+  border-color: #8fd2bb;
+}
+
+.ssl-state-warn {
+  color: #8d1710;
+  background: #fde6e3;
+  border-color: #efb8b3;
+}
+
+.ssl-state-manual {
+  color: #234468;
+  background: #e7f0ff;
+  border-color: #bad2f5;
+}
+
 .admin-restore-ready {
   margin-top: 0.85rem;
   padding: 0.8rem;
