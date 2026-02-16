@@ -39,7 +39,13 @@ Auf der Startseite findest du:
 ## 3. Neue Seite erstellen
 
 1. Klicke auf **Neue Seite**.
-2. Fuelle folgende Felder aus:
+2. Nutze den **Schnell-Assistenten** (3 Schritte):
+
+- **Inhaltstyp**: Idee, Dokumentation, Reisebericht, Finanznotiz oder Leer starten
+- **Kategorie**: passende Kategorie waehlen
+- **Schutz**: Standard oder Sensibel
+
+3. Fuelle die Felder aus (oder passe die Vorlage an):
 
 - **Titel**: sichtbarer Seitentitel
 - **Seitenadresse (URL-Pfad)**: z. B. `betriebshandbuch`
@@ -48,13 +54,14 @@ Auf der Startseite findest du:
 - **Tags**: kommagetrennt, z. B. `intern,prozess`
 - **Inhalt (Markdown)**: eigentlicher Text
 
-3. Speichern mit **Seite erstellen**.
+4. Speichern mit **Seite erstellen**.
 
 Hinweise:
 
 - Die **Seitenadresse** wird beim Tippen des Titels automatisch erstellt.
 - Erlaubt sind `a-z`, `0-9` und `-`.
 - Existiert die Seitenadresse bereits, zeigt FlatWiki eine Fehlermeldung.
+- Bei **Sensibel** wird Zugriff eingeschraenkt; mit aktivem `CONTENT_ENCRYPTION_KEY` wird zusaetzlich Verschluesselung aktiviert.
 
 ## 4. Seite bearbeiten
 

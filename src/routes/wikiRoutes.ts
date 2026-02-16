@@ -343,11 +343,63 @@ const renderEditorForm = (params: {
 }): string => `
   <section class="content-wrap editor-shell" data-preview-endpoint="/api/markdown/preview" data-csrf="${escapeHtml(
     params.csrfToken
-  )}" data-page-slug="${escapeHtml(params.slug)}">
+  )}" data-page-slug="${escapeHtml(params.slug)}" data-editor-mode="${params.mode}">
     <h1>${params.mode === "new" ? "Neue Seite" : "Seite bearbeiten"}</h1>
     <div class="editor-grid">
       <form method="post" action="${escapeHtml(params.action)}" class="stack large">
         <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
+        ${
+          params.mode === "new"
+            ? `
+              <section class="new-page-wizard stack" data-new-page-wizard data-encryption-available="${params.encryptionAvailable ? "1" : "0"}">
+                <h2>Schnell-Assistent</h2>
+                <p class="muted-note">In 3 Schritten zur neuen Seite: Inhaltstyp, Kategorie, Schutz.</p>
+                <ol class="wizard-steps">
+                  <li class="wizard-step" data-wizard-step="1">1. Inhaltstyp</li>
+                  <li class="wizard-step" data-wizard-step="2">2. Kategorie</li>
+                  <li class="wizard-step" data-wizard-step="3">3. Schutz</li>
+                </ol>
+
+                <div class="wizard-panel">
+                  <label class="wizard-heading">Inhaltstyp auswählen</label>
+                  <div class="wizard-template-grid">
+                    <button type="button" class="button secondary tiny wizard-template" data-template-id="idea">Idee</button>
+                    <button type="button" class="button secondary tiny wizard-template" data-template-id="documentation">Dokumentation</button>
+                    <button type="button" class="button secondary tiny wizard-template" data-template-id="travel">Reisebericht</button>
+                    <button type="button" class="button secondary tiny wizard-template" data-template-id="finance">Finanznotiz</button>
+                    <button type="button" class="button secondary tiny wizard-template" data-template-id="blank">Leer starten</button>
+                  </div>
+                </div>
+
+                <div class="wizard-panel">
+                  <label class="wizard-heading">Kategorie auswählen
+                    <select data-wizard-category>
+                      ${params.categories
+                        .map(
+                          (category) =>
+                            `<option value="${escapeHtml(category.id)}" ${category.id === params.selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                              category.name
+                            )}</option>`
+                        )
+                        .join("")}
+                    </select>
+                  </label>
+                </div>
+
+                <div class="wizard-panel">
+                  <label class="wizard-heading">Schutzmodus auswählen</label>
+                  <div class="wizard-sensitivity-row">
+                    <button type="button" class="button secondary tiny wizard-sensitivity" data-wizard-sensitivity="normal">Standard</button>
+                    <button type="button" class="button secondary tiny wizard-sensitivity" data-wizard-sensitivity="sensitive">Sensibel</button>
+                  </div>
+                  <p class="muted-note small" data-wizard-sensitivity-note>
+                    Sensibel setzt Zugriff auf ausgewählte Benutzer und aktiviert Verschlüsselung (wenn verfügbar).
+                  </p>
+                </div>
+              </section>
+            `
+            : ""
+        }
         <label>Titel
           <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" data-title-input />
         </label>
@@ -362,7 +414,7 @@ const renderEditorForm = (params: {
             data-slug-input
             data-slug-auto="${params.slugAuto === false ? "0" : "1"}"
           />
-          <span class="muted-note small">Adresse der Seite in der URL. Kann leer bleiben und wird automatisch erstellt.</span>
+          <span class="muted-note small">Kannst du leer lassen. FlatWiki erzeugt die Seitenadresse automatisch.</span>
         </label>
         <label>Kategorie
           <select name="categoryId" required data-category-input>
@@ -767,7 +819,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=8"]
+        scripts: ["/wiki-ui.js?v=9"]
       })
     );
   });
@@ -958,7 +1010,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=8"]
+        scripts: ["/wiki-ui.js?v=9"]
       })
     );
   });

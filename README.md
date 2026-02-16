@@ -43,6 +43,8 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Bild-Upload im Editor (1-x Dateien, automatische eindeutige Dateinamen)
 - Kategoriebezogene Upload-Pfade (`/uploads/<kategorie-ordner>/...`)
 - Visueller Markdown-Editor (Toolbar + Live-Vorschau)
+- Schnell-Assistent für neue Seiten (3 Schritte: Inhaltstyp, Kategorie, Schutz)
+- Vorlagen für Alltag/Firma: Idee, Dokumentation, Reisebericht, Finanznotiz
 - Automatische Artikel-Navigation (links) aus Markdown-Überschriften
 - Admin-Bildverwaltung mit Referenzprüfung (`/admin/media`)
   - zeigt pro Bild, ob es eingebunden ist und in welchen Artikeln
@@ -368,6 +370,7 @@ Hinweise:
 - Toolbar für schnelle Formatierung (Überschriften, Listen, Links, Code, Tabelle).
 - Live-Vorschau im Editor per Button auf "Vorschau".
 - Überschriften (`##`, `###`, ...) erzeugen automatisch eine linke Artikel-Navigation.
+- Beim Erstellen hilft ein 3-Schritte-Assistent inkl. Seitenvorlagen.
 - Format-Hilfe als Wiki-Seite: `/wiki/markdown-formatierung-howto`
 
 ## Bildverwaltung und Cleanup

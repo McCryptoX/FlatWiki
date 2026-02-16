@@ -87,7 +87,7 @@ export const renderLayout = (options: LayoutOptions): string => {
 <<<<<<< HEAD
     <link rel="stylesheet" href="/styles.css?v=13" />
 =======
-    <link rel="stylesheet" href="/styles.css?v=15" />
+    <link rel="stylesheet" href="/styles.css?v=16" />
 >>>>>>> ec58d38 (feat: scheduled backups with retention, history diff view and active ToC section highlight)
   </head>
   <body>

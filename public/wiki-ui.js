@@ -90,11 +90,112 @@
     }
   };
 
+  const slugify = (value) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80);
+
+  const TEMPLATE_PRESETS = {
+    idea: {
+      title: "Neue Idee",
+      tags: "idee",
+      content: `## Idee in einem Satz
+
+Beschreibe die Idee kurz und klar.
+
+## Ziel / Nutzen
+
+- Welches Problem wird gelöst?
+- Für wen ist es hilfreich?
+
+## Nächste Schritte
+
+- [ ] Ersten Entwurf erstellen
+- [ ] Aufwand einschätzen
+- [ ] Entscheidung treffen`
+    },
+    documentation: {
+      title: "Neue Dokumentation",
+      tags: "doku,howto",
+      content: `## Zweck
+
+Wofür ist diese Dokumentation gedacht?
+
+## Schritt-für-Schritt
+
+1. Schritt 1
+2. Schritt 2
+3. Schritt 3
+
+## Fehlerbehebung
+
+- Problem:
+- Lösung:`
+    },
+    travel: {
+      title: "Reisebericht",
+      tags: "reise,urlaub",
+      content: `## Reiseüberblick
+
+- Zeitraum:
+- Ort:
+- Mit wem:
+
+## Tagesnotizen
+
+### Tag 1
+
+Was ist passiert?
+
+### Tag 2
+
+Was war besonders?
+
+## Tipps für das nächste Mal
+
+- Tipp 1
+- Tipp 2`
+    },
+    finance: {
+      title: "Finanznotiz",
+      tags: "finanzen,sensibel",
+      content: `## Zusammenfassung
+
+Kurzer Überblick über den aktuellen Stand.
+
+## Konten / Depots
+
+- Konto/Depot A:
+- Konto/Depot B:
+
+## Änderungen
+
+- Datum:
+- Was wurde geändert:
+
+## Hinweis
+
+Keine PIN/TAN im Klartext speichern. Für besonders sensible Daten verschlüsseln und Zugriff einschränken.`
+    },
+    blank: {
+      title: "",
+      tags: "",
+      content: ""
+    }
+  };
+
   onReady(() => {
     const editorShell = document.querySelector(".editor-shell");
     if (!editorShell) return;
 
     const contentTextarea = editorShell.querySelector('[data-editor-textarea], textarea[name="content"]');
+    const titleInput = editorShell.querySelector('input[name="title"][data-title-input], input[name="title"]');
+    const slugInput = editorShell.querySelector('input[name="slug"][data-slug-input], input[name="slug"]');
+    const tagsInput = editorShell.querySelector('input[name="tags"]');
     const uploadForm = editorShell.querySelector(".image-upload-form");
     const output = editorShell.querySelector(".upload-markdown-output");
     const encryptionToggle = editorShell.querySelector('input[name="encrypted"][data-encrypted-toggle], input[name="encrypted"]');
@@ -121,6 +222,22 @@
     const toolbarButtons = editorShell.querySelectorAll("[data-md-action]");
     const previewPanel = editorShell.querySelector(".editor-preview");
     const viewButtons = editorShell.querySelectorAll("[data-editor-view-btn]");
+    const wizardRoot = editorShell.querySelector("[data-new-page-wizard]");
+    const wizardCategorySelect = wizardRoot ? wizardRoot.querySelector("[data-wizard-category]") : null;
+    const wizardSensitivityNote = wizardRoot ? wizardRoot.querySelector("[data-wizard-sensitivity-note]") : null;
+    const wizardStepElements = wizardRoot
+      ? {
+          one: wizardRoot.querySelector('[data-wizard-step="1"]'),
+          two: wizardRoot.querySelector('[data-wizard-step="2"]'),
+          three: wizardRoot.querySelector('[data-wizard-step="3"]')
+        }
+      : null;
+    const wizardTemplateButtons = wizardRoot
+      ? Array.from(wizardRoot.querySelectorAll("[data-template-id]")).filter((entry) => entry instanceof HTMLButtonElement)
+      : [];
+    const wizardSensitivityButtons = wizardRoot
+      ? Array.from(wizardRoot.querySelectorAll("[data-wizard-sensitivity]")).filter((entry) => entry instanceof HTMLButtonElement)
+      : [];
 
     if (!(contentTextarea instanceof HTMLTextAreaElement)) return;
 
@@ -219,6 +336,120 @@
       }
     };
 
+    const syncSlugFromTitle = () => {
+      if (!(titleInput instanceof HTMLInputElement) || !(slugInput instanceof HTMLInputElement) || slugInput.readOnly) return;
+      if ((slugInput.dataset.slugAuto || "1") !== "1") return;
+      slugInput.value = slugify(titleInput.value);
+    };
+
+    const updateSlugAutoState = () => {
+      if (!(titleInput instanceof HTMLInputElement) || !(slugInput instanceof HTMLInputElement) || slugInput.readOnly) return;
+      const current = slugInput.value.trim();
+      const titleBased = slugify(titleInput.value);
+      const isAuto = current.length === 0 || current === titleBased;
+      slugInput.dataset.slugAuto = isAuto ? "1" : "0";
+    };
+
+    let selectedTemplateId = "";
+    let selectedSensitivity = "";
+
+    const renderWizardStates = () => {
+      if (!wizardRoot || !wizardStepElements) return;
+
+      const step1Done =
+        selectedTemplateId.length > 0 ||
+        (titleInput instanceof HTMLInputElement && titleInput.value.trim().length > 0) ||
+        contentTextarea.value.trim().length > 0;
+      const step2Done = categorySelect instanceof HTMLSelectElement && categorySelect.value.trim().length > 0;
+      const step3Done = selectedSensitivity.length > 0;
+      const firstOpenStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : 3;
+
+      const states = [
+        { element: wizardStepElements.one, done: step1Done, active: firstOpenStep === 1 },
+        { element: wizardStepElements.two, done: step2Done, active: firstOpenStep === 2 },
+        { element: wizardStepElements.three, done: step3Done, active: firstOpenStep === 3 }
+      ];
+
+      for (const state of states) {
+        if (!(state.element instanceof HTMLElement)) continue;
+        state.element.classList.toggle("is-done", state.done);
+        state.element.classList.toggle("is-active", state.active);
+      }
+    };
+
+    const setSensitivityVisual = (mode) => {
+      if (!wizardRoot) return;
+      for (const button of wizardSensitivityButtons) {
+        if (!(button instanceof HTMLButtonElement)) continue;
+        button.classList.toggle("is-selected", (button.dataset.wizardSensitivity || "") === mode);
+      }
+      if (wizardSensitivityNote instanceof HTMLElement) {
+        if (mode === "sensitive") {
+          wizardSensitivityNote.textContent =
+            encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled
+              ? "Sensibel aktiv: Zugriff nur ausgewählt + Verschlüsselung aktiviert."
+              : "Sensibel aktiv: Zugriff nur ausgewählt. Verschlüsselung ist aktuell nicht verfügbar.";
+        } else {
+          wizardSensitivityNote.textContent = "Standard aktiv: Alle angemeldeten Benutzer mit Zugriff.";
+        }
+      }
+    };
+
+    const applySensitivity = (mode) => {
+      if (!(visibilitySelect instanceof HTMLSelectElement)) return;
+      selectedSensitivity = mode === "sensitive" ? "sensitive" : "normal";
+      visibilitySelect.value = selectedSensitivity === "sensitive" ? "restricted" : "all";
+      visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
+
+      if (encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled) {
+        encryptionToggle.checked = selectedSensitivity === "sensitive";
+        encryptionToggle.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      setSensitivityVisual(selectedSensitivity);
+      renderWizardStates();
+    };
+
+    const syncSensitivityFromForm = () => {
+      if (!(visibilitySelect instanceof HTMLSelectElement)) return;
+      selectedSensitivity = visibilitySelect.value === "restricted" ? "sensitive" : "normal";
+      setSensitivityVisual(selectedSensitivity);
+      renderWizardStates();
+    };
+
+    const applyTemplatePreset = (templateId) => {
+      if (!(titleInput instanceof HTMLInputElement) || !(tagsInput instanceof HTMLInputElement)) return;
+      const preset = TEMPLATE_PRESETS[templateId] || TEMPLATE_PRESETS.blank;
+
+      const shouldConfirmReplace =
+        contentTextarea.value.trim().length > 0 &&
+        contentTextarea.value.trim() !== String(preset.content || "").trim();
+      if (shouldConfirmReplace && !window.confirm("Vorlage anwenden und vorhandenen Inhalt ersetzen?")) {
+        return;
+      }
+
+      selectedTemplateId = templateId;
+      titleInput.value = preset.title || "";
+      tagsInput.value = preset.tags || "";
+      contentTextarea.value = preset.content || "";
+      contentTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+
+      if (slugInput instanceof HTMLInputElement && !slugInput.readOnly) {
+        slugInput.dataset.slugAuto = "1";
+        slugInput.value = slugify(titleInput.value);
+      }
+
+      for (const button of wizardTemplateButtons) {
+        if (!(button instanceof HTMLButtonElement)) continue;
+        button.classList.toggle("is-selected", (button.dataset.templateId || "") === templateId);
+      }
+
+      renderWizardStates();
+      if (currentView === "preview") {
+        void refreshPreview();
+      }
+    };
+
     const isUploadHardDisabled = () =>
       uploadForm instanceof HTMLFormElement && uploadForm.dataset.uploadHardDisabled === "1";
 
@@ -293,6 +524,7 @@
     if (visibilitySelect instanceof HTMLSelectElement) {
       visibilitySelect.addEventListener("change", () => {
         syncRestrictedVisibility();
+        syncSensitivityFromForm();
         for (const picker of accessPickers) {
           syncPickerCount(picker);
         }
@@ -318,6 +550,55 @@
         if (target instanceof HTMLInputElement && target.type === "checkbox") {
           syncPickerCount(picker);
         }
+      });
+    }
+
+    if (titleInput instanceof HTMLInputElement) {
+      titleInput.addEventListener("input", () => {
+        syncSlugFromTitle();
+        renderWizardStates();
+      });
+    }
+
+    if (slugInput instanceof HTMLInputElement && !slugInput.readOnly) {
+      slugInput.addEventListener("input", () => {
+        updateSlugAutoState();
+        renderWizardStates();
+      });
+      slugInput.addEventListener("blur", () => {
+        updateSlugAutoState();
+      });
+    }
+
+    if (categorySelect instanceof HTMLSelectElement) {
+      categorySelect.addEventListener("change", () => {
+        if (wizardCategorySelect instanceof HTMLSelectElement) {
+          wizardCategorySelect.value = categorySelect.value;
+        }
+        renderWizardStates();
+      });
+    }
+
+    if (wizardCategorySelect instanceof HTMLSelectElement && categorySelect instanceof HTMLSelectElement) {
+      wizardCategorySelect.addEventListener("change", () => {
+        categorySelect.value = wizardCategorySelect.value;
+        categorySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      wizardCategorySelect.value = categorySelect.value;
+    }
+
+    for (const button of wizardTemplateButtons) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      button.addEventListener("click", () => {
+        applyTemplatePreset(button.dataset.templateId || "blank");
+      });
+    }
+
+    for (const button of wizardSensitivityButtons) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      button.addEventListener("click", () => {
+        const mode = button.dataset.wizardSensitivity || "normal";
+        applySensitivity(mode);
       });
     }
 
@@ -387,6 +668,10 @@
     }
 
     syncUploadAvailability();
+    syncSlugFromTitle();
+    updateSlugAutoState();
+    syncSensitivityFromForm();
+    renderWizardStates();
 
     contentTextarea.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
