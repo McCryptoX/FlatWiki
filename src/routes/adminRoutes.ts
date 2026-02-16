@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createReadStream, createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { requireAdmin, verifySessionCsrfToken } from "../lib/auth.js";
@@ -573,6 +574,10 @@ const renderBackupManagement = (
           ? "Fertig"
           : "Bereit";
   const operationRunning = backupStatus.running || restoreStatus.running;
+  const backupPassphrase = (process.env.BACKUP_ENCRYPTION_KEY ?? "").trim();
+  const backupPassphraseFingerprint = backupPassphrase
+    ? createHash("sha256").update(backupPassphrase).digest("hex").slice(0, 16)
+    : "";
   const automationStateLabel = automationStatus.enabled ? "Aktiv" : "Deaktiviert";
   const automationLastResultLabel =
     automationStatus.lastResult === "success"
@@ -636,7 +641,7 @@ const renderBackupManagement = (
         <form method="post" action="/admin/backups/restore/start" class="stack">
           <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
           <input type="hidden" name="ticketId" value="${escapeHtml(preparedRestore.id)}" />
-          <label>Backup-Passphrase (erneut)
+          <label>Backup-Passphrase (erneut, identisch zu BACKUP_ENCRYPTION_KEY)
             <input type="password" name="passphrase" autocomplete="off" minlength="8" required ${operationRunning ? "disabled" : ""} />
           </label>
           <label class="checkline standalone-checkline">
@@ -695,7 +700,9 @@ const renderBackupManagement = (
         <p class="muted-note">Erstellt ein verschlüsseltes Daten-Backup inkl. Prüfsumme im Ordner <code>data/backups</code>.</p>
         ${
           hasBackupKey
-            ? '<p class="muted-note">Schlüsselstatus: <strong>BACKUP_ENCRYPTION_KEY aktiv</strong>.</p>'
+            ? `<p class="muted-note">Schlüsselstatus: <strong>BACKUP_ENCRYPTION_KEY aktiv</strong>.</p>
+               <p class="muted-note"><strong>Backup-Passphrase:</strong> Der exakte Wert aus <code>BACKUP_ENCRYPTION_KEY</code> in <code>config.env</code>.</p>
+               <p class="muted-note">Fingerprint (SHA-256, gekürzt): <code>${escapeHtml(backupPassphraseFingerprint)}</code></p>`
             : '<p class="muted-note">Schlüsselstatus: <strong>BACKUP_ENCRYPTION_KEY fehlt</strong>. Bitte in <code>config.env</code> setzen und Dienst neu starten.</p>'
         }
         <div class="action-row">
@@ -723,12 +730,13 @@ const renderBackupManagement = (
       <div class="admin-index-panel">
         <h2>Backup wiederherstellen</h2>
         <p class="muted-note">1. Datei hochladen und prüfen. 2. Wiederherstellung explizit bestätigen. 3. Restore wird mit Fortschritt ausgeführt.</p>
+        <p class="muted-note"><strong>Wichtig:</strong> Für Prüfung und Restore ist die gleiche Passphrase nötig wie beim Erstellen: <code>BACKUP_ENCRYPTION_KEY</code> aus <code>config.env</code>.</p>
         <form method="post" action="/admin/backups/restore/prepare" enctype="multipart/form-data" class="stack">
           <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
           <label>Backup-Datei (.tar.gz.enc)
             <input type="file" name="backupFile" accept=".enc,.tar.gz.enc" required ${operationRunning ? "disabled" : ""} />
           </label>
-          <label>Backup-Passphrase
+          <label>Backup-Passphrase (Wert aus BACKUP_ENCRYPTION_KEY)
             <input type="password" name="passphrase" autocomplete="off" minlength="8" required ${operationRunning ? "disabled" : ""} />
           </label>
           <div class="action-row">
