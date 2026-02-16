@@ -34,6 +34,7 @@ export interface WikiCategory {
 }
 
 export type WikiTemplateSensitivity = "normal" | "sensitive";
+export type SecurityProfile = "standard" | "sensitive" | "confidential";
 
 export interface WikiPageTemplate {
   id: string;
@@ -65,6 +66,7 @@ export interface WikiPage {
   title: string;
   categoryId: string;
   categoryName: string;
+  securityProfile: SecurityProfile;
   sensitive: boolean;
   visibility: WikiVisibility;
   allowedUsers: string[];
@@ -87,6 +89,7 @@ export interface WikiPageSummary {
   title: string;
   categoryId: string;
   categoryName: string;
+  securityProfile: SecurityProfile;
   sensitive: boolean;
   visibility: WikiVisibility;
   allowedUsers: string[];
@@ -95,6 +98,7 @@ export interface WikiPageSummary {
   tags: string[];
   excerpt: string;
   updatedAt: string;
+  updatedBy: string;
 }
 
 export type WikiVisibility = "all" | "restricted";

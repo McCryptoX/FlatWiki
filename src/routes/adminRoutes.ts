@@ -57,7 +57,7 @@ import {
   validateUserInput
 } from "../lib/userStore.js";
 import { validatePasswordStrength } from "../lib/password.js";
-import { getRuntimeSettings, setIndexBackend } from "../lib/runtimeSettingsStore.js";
+import { getRuntimeSettings, getUiMode, setIndexBackend, setUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
 import { deleteUserSessions } from "../lib/sessionStore.js";
 import { listBrokenInternalLinks, listPages } from "../lib/wikiStore.js";
 
@@ -1147,8 +1147,37 @@ const renderSslManagement = (inspection: SslStatusInspection): string => {
   `;
 };
 
+const renderUiModeManagement = (
+  csrfToken: string,
+  currentUiMode: UiMode
+): string => `
+  <section class="content-wrap stack">
+    <div class="admin-index-panel stack">
+      <h2>Betriebsmodus</h2>
+      <p class="muted-note">
+        <strong>Einfach:</strong> reduzierte Admin-Oberfläche für Alltagseinsatz.
+        <br />
+        <strong>Erweitert:</strong> alle technischen Bereiche sichtbar (Backups, Versionen, Link-Check, Suchindex, TLS/SSL).
+      </p>
+      <form method="post" action="/admin/ui" class="stack">
+        <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}" />
+        <label>Modus
+          <select name="mode">
+            <option value="simple" ${currentUiMode === "simple" ? "selected" : ""}>Einfach</option>
+            <option value="advanced" ${currentUiMode === "advanced" ? "selected" : ""}>Erweitert</option>
+          </select>
+        </label>
+        <div class="action-row">
+          <button type="submit">Modus speichern</button>
+        </div>
+      </form>
+    </div>
+  </section>
+`;
+
 type AdminNavKey =
   | "users"
+  | "ui"
   | "media"
   | "categories"
   | "templates"
@@ -1159,26 +1188,32 @@ type AdminNavKey =
   | "index"
   | "ssl";
 
-const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> = [
+const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string; minMode?: UiMode }> = [
   { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
+  { key: "ui", href: "/admin/ui", label: "Bedienmodus" },
   { key: "media", href: "/admin/media", label: "Bildverwaltung" },
   { key: "categories", href: "/admin/categories", label: "Kategorien" },
   { key: "templates", href: "/admin/templates", label: "Vorlagen" },
-  { key: "groups", href: "/admin/groups", label: "Gruppen" },
-  { key: "versions", href: "/admin/versions", label: "Versionen" },
-  { key: "backups", href: "/admin/backups", label: "Backups" },
-  { key: "ssl", href: "/admin/ssl", label: "TLS/SSL" },
-  { key: "links", href: "/admin/links", label: "Link-Check" },
-  { key: "index", href: "/admin/index", label: "Suchindex" }
+  { key: "groups", href: "/admin/groups", label: "Gruppen", minMode: "advanced" },
+  { key: "versions", href: "/admin/versions", label: "Versionen", minMode: "advanced" },
+  { key: "backups", href: "/admin/backups", label: "Backups", minMode: "advanced" },
+  { key: "ssl", href: "/admin/ssl", label: "TLS/SSL", minMode: "advanced" },
+  { key: "links", href: "/admin/links", label: "Link-Check", minMode: "advanced" },
+  { key: "index", href: "/admin/index", label: "Suchindex", minMode: "advanced" }
 ];
 
 const renderAdminNav = (active: AdminNavKey): string => `
   <nav class="action-row admin-nav" aria-label="Admin Navigation">
-    ${ADMIN_NAV_ITEMS.map((item) => {
+    ${ADMIN_NAV_ITEMS.filter((item) => {
+      if (!item.minMode) return true;
+      return getUiMode() === "advanced";
+    })
+      .map((item) => {
       const activeClass = item.key === active ? " is-active-nav" : "";
       const ariaCurrent = item.key === active ? ' aria-current="page"' : "";
       return `<a class="button secondary${activeClass}" href="${item.href}"${ariaCurrent}>${item.label}</a>`;
-    }).join("")}
+    })
+      .join("")}
   </nav>
 `;
 
@@ -1223,6 +1258,57 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         error: query.error
       })
     );
+  });
+
+  app.get("/admin/ui", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const currentUiMode = getUiMode();
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Bedienmodus",
+        description: "Wähle, wie umfangreich die Admin-Oberfläche angezeigt wird.",
+        active: "ui"
+      })}
+      ${renderUiModeManagement(request.csrfToken ?? "", currentUiMode)}
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Bedienmodus",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
+  app.post("/admin/ui", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const result = await setUiMode({
+      mode: body.mode ?? "",
+      ...(request.currentUser?.username ? { updatedBy: request.currentUser.username } : {})
+    });
+    if (!result.ok) {
+      return reply.redirect(`/admin/ui?error=${encodeURIComponent(result.error ?? "Bedienmodus konnte nicht gespeichert werden.")}`);
+    }
+
+    await writeAuditLog({
+      action: "admin_ui_mode_changed",
+      actorId: request.currentUser?.id,
+      details: {
+        mode: result.uiMode
+      }
+    });
+
+    const notice = result.changed ? `Bedienmodus gespeichert: ${result.uiMode === "simple" ? "Einfach" : "Erweitert"}.` : "Bedienmodus unverändert.";
+    return reply.redirect(`/admin/ui?notice=${encodeURIComponent(notice)}`);
   });
 
   app.get("/admin/media", { preHandler: [requireAdmin] }, async (request, reply) => {

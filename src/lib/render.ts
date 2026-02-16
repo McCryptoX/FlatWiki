@@ -84,7 +84,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <title>${title}</title>
-    <link rel="stylesheet" href="/styles.css?v=17" />
+    <link rel="stylesheet" href="/styles.css?v=18" />
   </head>
   <body>
     <div class="bg-shape bg-shape-1"></div>
@@ -128,9 +128,16 @@ export const renderPageList = (pages: WikiPageSummary[]): string => {
             <div class="card-meta">
               <span class="meta-pill">${formatDate(page.updatedAt)}</span>
               <span class="meta-pill">Kategorie: ${escapeHtml(page.categoryName)}</span>
-              ${page.sensitive ? '<span class="meta-pill">Sensibel</span>' : ""}
+              <span class="meta-pill">Profil: ${
+                page.securityProfile === "confidential"
+                  ? "Vertraulich"
+                  : page.securityProfile === "sensitive"
+                    ? "Sensibel"
+                    : "Standard"
+              }</span>
               <span class="meta-pill">${page.visibility === "restricted" ? "Zugriff: eingeschränkt" : "Zugriff: alle"}</span>
               <span class="meta-pill">${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"}</span>
+              ${page.updatedBy && page.updatedBy !== "unknown" ? `<span class="meta-pill">von ${escapeHtml(page.updatedBy)}</span>` : ""}
             </div>
             ${
               page.tags.length > 0

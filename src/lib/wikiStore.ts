@@ -5,7 +5,7 @@ import matter from "gray-matter";
 import { marked, type Tokens } from "marked";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../config.js";
-import type { PublicUser, WikiHeading, WikiPage, WikiPageSummary, WikiVisibility } from "../types.js";
+import type { PublicUser, SecurityProfile, WikiHeading, WikiPage, WikiPageSummary, WikiVisibility } from "../types.js";
 import { findCategoryById, getDefaultCategory, listCategories } from "./categoryStore.js";
 import { ensureDir, readJsonFile, readTextFile, removeFile, writeTextFile } from "./fileStore.js";
 import { listGroupIdsForUser } from "./groupStore.js";
@@ -312,6 +312,15 @@ const normalizeTags = (rawTags: unknown): string[] => {
 };
 
 const normalizeSensitive = (value: unknown): boolean => value === true;
+const normalizeSecurityProfile = (value: unknown, fallback: SecurityProfile = "standard"): SecurityProfile => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "sensitive") return "sensitive";
+  if (normalized === "confidential") return "confidential";
+  if (normalized === "standard") return "standard";
+  return fallback;
+};
 
 const normalizeVisibility = (value: unknown): WikiVisibility => (value === "restricted" ? "restricted" : "all");
 
@@ -582,10 +591,13 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
   const encryptedByMeta = data.encrypted === true;
   const encryptedByPayload =
     typeof data.encIv === "string" && typeof data.encTag === "string" && typeof data.encData === "string";
-  const encrypted = encryptedByMeta || encryptedByPayload;
+  const encryptedRaw = encryptedByMeta || encryptedByPayload;
   const sensitiveByMeta = normalizeSensitive(data.sensitive);
-  const sensitive = sensitiveByMeta || (requestedVisibility === "restricted" && encrypted);
-  const visibility: WikiVisibility = sensitive ? "restricted" : requestedVisibility;
+  const legacySensitive = sensitiveByMeta || (requestedVisibility === "restricted" && encryptedRaw);
+  const securityProfile = normalizeSecurityProfile(data.securityProfile, legacySensitive ? "sensitive" : "standard");
+  const sensitive = securityProfile === "standard" ? legacySensitive : true;
+  const encrypted = securityProfile === "standard" ? encryptedRaw : true;
+  const visibility: WikiVisibility = securityProfile === "standard" ? (sensitive ? "restricted" : requestedVisibility) : "restricted";
   const allowedUsers = visibility === "restricted" ? normalizeAllowedUsers(data.allowedUsers) : [];
   const allowedGroups = visibility === "restricted" ? normalizeAllowedGroups(data.allowedGroups) : [];
   const encIv = String(data.encIv ?? "");
@@ -637,6 +649,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
       title,
       categoryId: category.id,
       categoryName: category.name,
+      securityProfile,
       sensitive,
       visibility,
       allowedUsers,
@@ -682,6 +695,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
       title,
       categoryId: category.id,
       categoryName: category.name,
+      securityProfile,
       sensitive,
       visibility,
       allowedUsers,
@@ -711,6 +725,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
       title,
       categoryId: category.id,
       categoryName: category.name,
+      securityProfile,
       sensitive,
       visibility,
       allowedUsers,
@@ -736,6 +751,7 @@ const parseMarkdownPageFromPath = async (slug: string, filePath: string, fallbac
     title,
     categoryId: category.id,
     categoryName: category.name,
+    securityProfile,
     sensitive,
     visibility,
     allowedUsers,
@@ -759,6 +775,7 @@ const toSummary = (page: WikiPage): WikiPageSummary => ({
   title: page.title,
   categoryId: page.categoryId,
   categoryName: page.categoryName,
+  securityProfile: page.securityProfile,
   sensitive: page.sensitive,
   visibility: page.visibility,
   allowedUsers: page.allowedUsers,
@@ -771,7 +788,8 @@ const toSummary = (page: WikiPage): WikiPageSummary => ({
       : page.encrypted
         ? "Verschlüsselter Inhalt"
         : cleanTextExcerpt(page.content).slice(0, 220),
-  updatedAt: page.updatedAt
+  updatedAt: page.updatedAt,
+  updatedBy: page.updatedBy
 });
 
 const clonePage = (page: WikiPage): WikiPage => ({
@@ -1043,6 +1061,7 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
           title: entry.title,
           categoryId: entry.categoryId,
           categoryName: entry.categoryName,
+          securityProfile: entry.securityProfile,
           sensitive: entry.sensitive,
           visibility: entry.visibility,
           allowedUsers: entry.allowedUsers,
@@ -1050,7 +1069,8 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
           encrypted: entry.encrypted,
           tags: entry.tags,
           excerpt: entry.excerpt,
-          updatedAt: entry.updatedAt
+          updatedAt: entry.updatedAt,
+          updatedBy: entry.updatedBy
         },
         titleLower: entry.title.toLowerCase(),
         tagsLower: entry.tags.map((tag) => tag.toLowerCase()),
@@ -1081,12 +1101,14 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
 
     const encrypted = raw.encrypted === true;
     const sensitive = raw.sensitive === true || (encrypted && raw.visibility === "restricted");
+    const securityProfile = normalizeSecurityProfile(raw.securityProfile, sensitive ? "sensitive" : "standard");
     const excerpt = encrypted ? "Verschlüsselter Inhalt" : sensitive ? "Sensibler Inhalt" : String(raw.excerpt ?? "").trim();
     const summary: WikiPageSummary = {
       slug,
       title: String(raw.title ?? slug).trim() || slug,
       categoryId: String(raw.categoryId ?? "").trim() || "default",
       categoryName: String(raw.categoryName ?? "Allgemein").trim() || "Allgemein",
+      securityProfile,
       sensitive,
       visibility: raw.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: Array.isArray(raw.allowedUsers)
@@ -1098,7 +1120,8 @@ const loadPersistedSuggestionIndex = async (options?: { categoryId?: string }): 
       encrypted,
       tags: Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean) : [],
       excerpt,
-      updatedAt: String(raw.updatedAt ?? "")
+      updatedAt: String(raw.updatedAt ?? ""),
+      updatedBy: String(raw.updatedBy ?? "unknown").trim() || "unknown"
     };
 
     if (options?.categoryId && summary.categoryId !== options.categoryId) continue;
@@ -1150,6 +1173,7 @@ export interface SavePageInput {
   content: string;
   updatedBy: string;
   categoryId?: string;
+  securityProfile?: SecurityProfile;
   sensitive?: boolean;
   visibility?: WikiVisibility;
   allowedUsers?: string[];
@@ -1162,7 +1186,7 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const title = input.title.trim();
 
   if (!isValidSlug(slug)) {
-    return { ok: false, error: "Slug ist ungültig." };
+    return { ok: false, error: "Seitenadresse ist ungültig." };
   }
 
   if (title.length < 2 || title.length > 120) {
@@ -1177,7 +1201,10 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const category = (await findCategoryById(input.categoryId ?? "")) ?? (await getDefaultCategory());
   const requestedSensitive = input.sensitive === true;
   const requestedVisibility = input.visibility === "restricted" ? "restricted" : "all";
-  const visibility = requestedSensitive ? "restricted" : requestedVisibility;
+  const requestedSecurityProfile = normalizeSecurityProfile(input.securityProfile, requestedSensitive ? "sensitive" : "standard");
+  const securityProfile: SecurityProfile =
+    requestedSecurityProfile === "standard" && requestedSensitive ? "sensitive" : requestedSecurityProfile;
+  const visibility = securityProfile === "standard" ? (requestedSensitive ? "restricted" : requestedVisibility) : "restricted";
   const allowedUsers = visibility === "restricted" ? normalizeAllowedUsers(input.allowedUsers ?? []) : [];
   const allowedGroups = visibility === "restricted" ? normalizeAllowedGroups(input.allowedGroups ?? []) : [];
 
@@ -1188,8 +1215,8 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
     };
   }
 
-  const encrypted = requestedSensitive ? true : Boolean(input.encrypted);
-  const sensitive = requestedSensitive;
+  const encrypted = securityProfile === "standard" ? Boolean(input.encrypted) : true;
+  const sensitive = securityProfile === "standard" ? requestedSensitive : true;
   if (sensitive && !config.contentEncryptionKey) {
     return { ok: false, error: "Sensibler Modus ist nicht möglich: CONTENT_ENCRYPTION_KEY fehlt." };
   }
@@ -1209,6 +1236,7 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   const frontmatterData: Record<string, unknown> = {
     title,
     categoryId: category.id,
+    securityProfile,
     sensitive,
     visibility,
     allowedUsers,

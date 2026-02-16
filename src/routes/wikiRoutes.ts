@@ -15,6 +15,7 @@ import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/ren
 import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
 import { buildUnifiedDiff } from "../lib/textDiff.js";
 import { listUsers } from "../lib/userStore.js";
+import type { SecurityProfile, WikiPageSummary } from "../types.js";
 import {
   canUserAccessPage,
   deletePage,
@@ -328,6 +329,120 @@ const normalizeTagFilter = (value: string): string => {
   return normalized;
 };
 
+const normalizeSecurityProfileValue = (value: string | undefined): SecurityProfile => {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "sensitive") return "sensitive";
+  if (normalized === "confidential") return "confidential";
+  return "standard";
+};
+
+const formatSecurityProfileLabel = (value: SecurityProfile): string => {
+  if (value === "confidential") return "Vertraulich";
+  if (value === "sensitive") return "Sensibel";
+  return "Standard";
+};
+
+const applySecurityProfileToSettings = (
+  securityProfile: SecurityProfile,
+  input: { visibility: "all" | "restricted"; encrypted: boolean; sensitive: boolean }
+): { securityProfile: SecurityProfile; visibility: "all" | "restricted"; encrypted: boolean; sensitive: boolean } => {
+  if (securityProfile === "sensitive" || securityProfile === "confidential") {
+    return {
+      securityProfile,
+      visibility: "restricted",
+      encrypted: true,
+      sensitive: true
+    };
+  }
+
+  return {
+    securityProfile: "standard",
+    visibility: input.sensitive ? "restricted" : input.visibility,
+    encrypted: input.encrypted,
+    sensitive: input.sensitive
+  };
+};
+
+const renderSearchResultList = (
+  pages: WikiPageSummary[],
+  searchContext: {
+    query: string;
+    activeTag: string;
+    selectedCategoryId: string;
+    selectedAuthor: string;
+    selectedTimeframe: string;
+    selectedScope: string;
+  }
+): string => {
+  if (pages.length < 1) {
+    return '<p class="empty">Keine passenden Ergebnisse gefunden.</p>';
+  }
+
+  const queryParamsForTag = new URLSearchParams();
+  if (searchContext.query) queryParamsForTag.set("q", searchContext.query);
+  if (searchContext.selectedCategoryId) queryParamsForTag.set("category", searchContext.selectedCategoryId);
+  if (searchContext.selectedAuthor) queryParamsForTag.set("author", searchContext.selectedAuthor);
+  if (searchContext.selectedTimeframe) queryParamsForTag.set("timeframe", searchContext.selectedTimeframe);
+  if (searchContext.selectedScope) queryParamsForTag.set("scope", searchContext.selectedScope);
+
+  return `
+    <section class="search-results-list">
+      ${pages
+        .map((page) => {
+          const metaBits = [
+            formatDate(page.updatedAt),
+            page.categoryName,
+            page.updatedBy && page.updatedBy !== "unknown" ? `Autor: ${page.updatedBy}` : "",
+            page.visibility === "restricted" ? "Eingeschränkter Zugriff" : "Öffentlich im Team",
+            page.encrypted ? "Verschlüsselt" : ""
+          ].filter((entry) => entry.length > 0);
+
+          const tags = page.tags
+            .slice(0, 8)
+            .map((tag) => {
+              const params = new URLSearchParams(queryParamsForTag);
+              params.set("tag", tag);
+              return `<a class="tag-chip" href="/search?${params.toString()}">#${escapeHtml(tag)}</a>`;
+            })
+            .join("");
+
+          return `
+            <article class="search-hit-card">
+              <h3><a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a></h3>
+              <p class="card-excerpt">${escapeHtml(page.excerpt || "Keine Vorschau verfügbar.")}</p>
+              <p class="search-hit-meta">${escapeHtml(metaBits.join(" • "))}</p>
+              ${tags ? `<div class="card-tags">${tags}</div>` : ""}
+            </article>
+          `;
+        })
+        .join("")}
+    </section>
+  `;
+};
+
+const renderRecentPages = (pages: WikiPageSummary[]): string => {
+  if (pages.length < 1) {
+    return '<p class="empty">Noch keine Artikel vorhanden.</p>';
+  }
+
+  return `
+    <div class="dashboard-recent-list">
+      ${pages
+        .map(
+          (page) => `
+            <a class="dashboard-recent-item" href="/wiki/${encodeURIComponent(page.slug)}">
+              <strong>${escapeHtml(page.title)}</strong>
+              <span>${escapeHtml(page.categoryName)} • ${escapeHtml(formatDate(page.updatedAt))}${
+                page.updatedBy && page.updatedBy !== "unknown" ? ` • ${escapeHtml(page.updatedBy)}` : ""
+              }</span>
+            </a>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+};
+
 const renderEditorForm = (params: {
   mode: "new" | "edit";
   action: string;
@@ -340,7 +455,7 @@ const renderEditorForm = (params: {
   slugLocked?: boolean;
   categories: Array<{ id: string; name: string }>;
   selectedCategoryId: string;
-  sensitive: boolean;
+  securityProfile: SecurityProfile;
   visibility: "all" | "restricted";
   allowedUsers: string[];
   allowedGroups: string[];
@@ -355,26 +470,30 @@ const renderEditorForm = (params: {
     defaultContent: string;
     sensitivity: "normal" | "sensitive";
   }>;
+  selectedTemplateId?: string;
   encrypted: boolean;
   encryptionAvailable: boolean;
 }): string => `
   <section class="content-wrap editor-shell" data-preview-endpoint="/api/markdown/preview" data-csrf="${escapeHtml(
     params.csrfToken
-  )}" data-page-slug="${escapeHtml(params.slug)}" data-editor-mode="${params.mode}">
+  )}" data-page-slug="${escapeHtml(params.slug)}" data-editor-mode="${params.mode}" data-security-profile="${escapeHtml(
+    params.securityProfile
+  )}" data-initial-template-id="${escapeHtml(params.selectedTemplateId ?? "")}">
     <h1>${params.mode === "new" ? "Neue Seite" : "Seite bearbeiten"}</h1>
     <div class="editor-grid">
       <form method="post" action="${escapeHtml(params.action)}" class="stack large">
         <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
+        <input type="hidden" name="securityProfile" value="${escapeHtml(params.securityProfile)}" data-security-profile-input />
         ${
           params.mode === "new"
             ? `
               <section class="new-page-wizard stack" data-new-page-wizard data-encryption-available="${params.encryptionAvailable ? "1" : "0"}">
                 <h2>Schnell-Assistent</h2>
-                <p class="muted-note">In 3 Schritten zur neuen Seite: Inhaltstyp, Kategorie, Schutz.</p>
+                <p class="muted-note">In 3 Schritten zur neuen Seite: Inhaltstyp, Zugriff und Speichern.</p>
                 <ol class="wizard-steps">
                   <li class="wizard-step" data-wizard-step="1">1. Inhaltstyp</li>
-                  <li class="wizard-step" data-wizard-step="2">2. Kategorie</li>
-                  <li class="wizard-step" data-wizard-step="3">3. Schutz</li>
+                  <li class="wizard-step" data-wizard-step="2">2. Zugriff</li>
+                  <li class="wizard-step" data-wizard-step="3">3. Speichern</li>
                 </ol>
 
                 <div class="wizard-panel">
@@ -396,29 +515,34 @@ const renderEditorForm = (params: {
                 </div>
 
                 <div class="wizard-panel">
-                  <label class="wizard-heading">Kategorie auswählen
-                    <select data-wizard-category>
-                      ${params.categories
-                        .map(
-                          (category) =>
-                            `<option value="${escapeHtml(category.id)}" ${category.id === params.selectedCategoryId ? "selected" : ""}>${escapeHtml(
-                              category.name
-                            )}</option>`
-                        )
-                        .join("")}
-                    </select>
-                  </label>
+                  <label class="wizard-heading">Sicherheitsprofil</label>
+                  <div class="wizard-sensitivity-row" data-security-profile-picker>
+                    <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="standard">Standard</button>
+                    <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
+                      params.encryptionAvailable ? "" : "disabled"
+                    }>Sensibel</button>
+                    <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="confidential" ${
+                      params.encryptionAvailable ? "" : "disabled"
+                    }>Vertraulich</button>
+                  </div>
+                  <p class="muted-note small" data-security-profile-note>
+                    Sensibel und Vertraulich erzwingen eingeschränkten Zugriff und Verschlüsselung.
+                  </p>
                 </div>
 
                 <div class="wizard-panel">
-                  <label class="wizard-heading">Schutzmodus auswählen</label>
-                  <div class="wizard-sensitivity-row">
-                    <button type="button" class="button secondary tiny wizard-sensitivity" data-wizard-sensitivity="normal">Standard</button>
-                    <button type="button" class="button secondary tiny wizard-sensitivity" data-wizard-sensitivity="sensitive">Sensibel</button>
-                  </div>
-                  <p class="muted-note small" data-wizard-sensitivity-note>
-                    Sensibel erzwingt eingeschränkten Zugriff und Verschlüsselung.
-                  </p>
+                  <label class="wizard-heading">Zugriff
+                    <select data-wizard-visibility>
+                      <option value="all" ${params.visibility === "all" ? "selected" : ""}>Alle angemeldeten Benutzer</option>
+                      <option value="restricted" ${params.visibility === "restricted" ? "selected" : ""}>Nur ausgewählte Benutzer</option>
+                    </select>
+                  </label>
+                  <p class="muted-note small">Bei eingeschränktem Zugriff wähle unten Benutzer oder Gruppen aus.</p>
+                </div>
+
+                <div class="wizard-panel">
+                  <label class="wizard-heading">Speichern</label>
+                  <p class="muted-note small">Titel und Inhalt prüfen, dann unten <strong>Seite erstellen</strong> klicken.</p>
                 </div>
               </section>
               <script type="application/json" data-template-presets>${serializeJsonForHtmlScript(
@@ -429,7 +553,7 @@ const renderEditorForm = (params: {
                   defaultTitle: template.defaultTitle,
                   defaultTags: template.defaultTags,
                   defaultContent: template.defaultContent,
-                  sensitivity: template.sensitivity
+                  securityProfile: template.sensitivity === "sensitive" ? "sensitive" : "standard"
                 }))
               )}</script>
             `
@@ -438,41 +562,25 @@ const renderEditorForm = (params: {
         <label>Titel
           <input type="text" name="title" value="${escapeHtml(params.title)}" required minlength="2" maxlength="120" data-title-input />
         </label>
-        <label>Seitenadresse (URL)
-          <input
-            type="text"
-            name="slug"
-            value="${escapeHtml(params.slug)}"
-            ${params.slugLocked ? "readonly" : ""}
-            pattern="[a-z0-9-]{1,80}"
-            placeholder="Wird automatisch aus dem Titel erstellt"
-            data-slug-input
-            data-slug-auto="${params.slugAuto === false ? "0" : "1"}"
-          />
-          <span class="muted-note small">Kannst du leer lassen. FlatWiki erzeugt die Seitenadresse automatisch.</span>
+        <label>Sicherheitsprofil
+          <div class="wizard-sensitivity-row" data-security-profile-picker>
+            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="standard">Standard</button>
+            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="sensitive" ${
+              params.encryptionAvailable ? "" : "disabled"
+            }>Sensibel</button>
+            <button type="button" class="button secondary tiny wizard-sensitivity" data-security-profile="confidential" ${
+              params.encryptionAvailable ? "" : "disabled"
+            }>Vertraulich</button>
+          </div>
         </label>
-        <label>Kategorie
-          <select name="categoryId" required data-category-input>
-            ${params.categories
-              .map(
-                (category) =>
-                  `<option value="${escapeHtml(category.id)}" ${category.id === params.selectedCategoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`
-              )
-              .join("")}
-          </select>
-        </label>
-        <label class="checkline standalone-checkline">
-          <input type="checkbox" name="sensitive" value="1" data-sensitive-toggle ${params.sensitive ? "checked" : ""} />
-          <span>Sensibler Artikel (erzwingt eingeschränkten Zugriff + Verschlüsselung)</span>
-        </label>
-        <p class="muted-note small">Warnung: Keine PIN, TAN, vollständige Kartendaten oder Geheimnisse im Klartext speichern.</p>
+        <p class="muted-note small" data-security-profile-note>Standard für normale Inhalte, Sensibel/Vertraulich für kritische Inhalte.</p>
         ${
           params.encryptionAvailable
             ? ""
-            : '<p class="muted-note small">Hinweis: Sensibler Modus ist nur mit <code>CONTENT_ENCRYPTION_KEY</code> verfügbar.</p>'
+            : '<p class="muted-note small">Hinweis: Sensibel/Vertraulich ist nur mit <code>CONTENT_ENCRYPTION_KEY</code> verfügbar.</p>'
         }
-        <label>Zugriff
-          <select name="visibility">
+        <label class="${params.mode === "new" ? "sr-only" : ""}">Zugriff
+          <select name="visibility" data-visibility-input>
             <option value="all" ${params.visibility === "all" ? "selected" : ""}>Alle angemeldeten Benutzer</option>
             <option value="restricted" ${params.visibility === "restricted" ? "selected" : ""}>Nur ausgewählte Benutzer</option>
           </select>
@@ -526,17 +634,50 @@ const renderEditorForm = (params: {
             }
           </div>
         </fieldset>
-        <label class="checkline standalone-checkline"><input type="checkbox" name="encrypted" value="1" data-encrypted-toggle ${
-          params.encrypted ? "checked" : ""
-        } ${params.encryptionAvailable ? "" : "disabled"} /> <span>Inhalt im Dateisystem verschlüsseln (AES-256)</span></label>
-        ${
-          params.encryptionAvailable
-            ? ""
-            : '<p class="muted-note small">Verschlüsselung ist derzeit nicht aktiv. Setze CONTENT_ENCRYPTION_KEY in config.env.</p>'
-        }
-        <label>Tags (kommagetrennt)
-          <input type="text" name="tags" value="${escapeHtml(params.tags)}" />
-        </label>
+        <details class="advanced-options" ${params.mode === "edit" ? "open" : ""}>
+          <summary>Mehr Optionen</summary>
+          <div class="stack">
+            <label>Seitenadresse (URL)
+              <input
+                type="text"
+                name="slug"
+                value="${escapeHtml(params.slug)}"
+                ${params.slugLocked ? "readonly" : ""}
+                pattern="[a-z0-9-]{1,80}"
+                placeholder="Wird automatisch aus dem Titel erstellt"
+                data-slug-input
+                data-slug-auto="${params.slugAuto === false ? "0" : "1"}"
+              />
+              <span class="muted-note small">Kannst du leer lassen. FlatWiki erzeugt die Seitenadresse automatisch.</span>
+            </label>
+            <label>Kategorie
+              <select name="categoryId" required data-category-input>
+                ${params.categories
+                  .map(
+                    (category) =>
+                      `<option value="${escapeHtml(category.id)}" ${category.id === params.selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                        category.name
+                      )}</option>`
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <label>Tags (kommagetrennt)
+              <input type="text" name="tags" value="${escapeHtml(params.tags)}" />
+            </label>
+            <label class="checkline standalone-checkline">
+              <input type="checkbox" name="encrypted" value="1" data-encrypted-toggle ${params.encrypted ? "checked" : ""} ${
+                params.encryptionAvailable ? "" : "disabled"
+              } />
+              <span>Inhalt im Dateisystem verschlüsseln (AES-256)</span>
+            </label>
+            ${
+              params.encryptionAvailable
+                ? '<p class="muted-note small">Bei Sensibel/Vertraulich wird Verschlüsselung automatisch erzwungen.</p>'
+                : '<p class="muted-note small">Verschlüsselung ist derzeit nicht aktiv. Setze CONTENT_ENCRYPTION_KEY in config.env.</p>'
+            }
+          </div>
+        </details>
         <label>Inhalt (Markdown)</label>
         <div class="editor-mode-row">
           <div class="editor-toggle-group" role="tablist" aria-label="Editor-Ansicht">
@@ -596,7 +737,7 @@ const buildEditorRedirectQuery = (params: {
   tags: string;
   content: string;
   categoryId: string;
-  sensitive: boolean;
+  securityProfile: SecurityProfile;
   visibility: "all" | "restricted";
   allowedUsers: string[];
   allowedGroups: string[];
@@ -611,7 +752,7 @@ const buildEditorRedirectQuery = (params: {
   query.set("tags", params.tags);
   query.set("content", params.content);
   query.set("categoryId", params.categoryId);
-  query.set("sensitive", params.sensitive ? "1" : "0");
+  query.set("securityProfile", params.securityProfile);
   query.set("visibility", params.visibility);
   query.set("allowedUsers", params.allowedUsers.join(","));
   query.set("allowedGroups", params.allowedGroups.join(","));
@@ -625,26 +766,73 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const selectedCategoryId = readSingle(query.category);
     const categoryFilter = selectedCategoryId ? { categoryId: selectedCategoryId } : undefined;
     const pages = await listPagesForUser(request.currentUser, categoryFilter);
+    const templates = await listTemplates({ includeDisabled: false });
     const pageNumber = parsePageNumber(readSingle(query.page));
     const paged = paginate(pages, pageNumber, 24);
     const categories = await listCategories();
+    const quickTemplateIds = ["idea", "documentation", "travel", "finance"];
+    const templateMap = new Map(templates.map((template) => [template.id, template]));
+    const quickTemplates = quickTemplateIds
+      .map((id) => templateMap.get(id))
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+    const recentPages = pages.slice(0, 8);
 
     const body = `
-      <section class="page-header">
-        <div>
-          <h1>Wiki-Übersicht</h1>
-          <p>Alle Inhalte sind als Markdown-Dateien gespeichert.</p>
-          ${renderCategoryFilter("/", categories, selectedCategoryId)}
-        </div>
-        <div class="action-row">
-          <a class="button secondary" href="/toc">Inhaltsverzeichnis</a>
-          <a class="button" href="/new">Neue Seite</a>
-        </div>
+      <section class="dashboard-shell stack large">
+        <section class="page-header">
+          <div>
+            <h1>Startseite</h1>
+            <p>Schnell starten und aktuelle Inhalte direkt sehen.</p>
+            ${renderCategoryFilter("/", categories, selectedCategoryId)}
+          </div>
+          <div class="action-row">
+            <a class="button secondary" href="/toc">Inhaltsverzeichnis</a>
+            <a class="button" href="/new">Neue Seite</a>
+          </div>
+        </section>
+
+        <section class="content-wrap stack">
+          <h2>Schnellstart</h2>
+          <div class="dashboard-quick-grid">
+            ${
+              quickTemplates.length > 0
+                ? quickTemplates
+                    .map(
+                      (template) => `
+                        <a class="dashboard-tile" href="/new?template=${encodeURIComponent(template.id)}">
+                          <strong>${escapeHtml(template.name)}</strong>
+                          <span>${escapeHtml(template.description || "Direkt mit Vorlage starten.")}</span>
+                        </a>
+                      `
+                    )
+                    .join("")
+                : `
+                  <a class="dashboard-tile" href="/new?template=idea"><strong>Idee</strong><span>Neue Ideen festhalten.</span></a>
+                  <a class="dashboard-tile" href="/new?template=documentation"><strong>Dokumentation</strong><span>Anleitungen und Wissen strukturieren.</span></a>
+                  <a class="dashboard-tile" href="/new?template=travel"><strong>Reisebericht</strong><span>Erlebnisse und Bilder sammeln.</span></a>
+                  <a class="dashboard-tile" href="/new?template=finance"><strong>Finanznotiz</strong><span>Kritische Inhalte geschützt erfassen.</span></a>
+                `
+            }
+            <a class="dashboard-tile dashboard-tile-ghost" href="/new?template=blank">
+              <strong>Leer starten</strong>
+              <span>Freie Seite ohne Vorlage.</span>
+            </a>
+          </div>
+        </section>
+
+        <section class="content-wrap stack">
+          <h2>Zuletzt bearbeitet</h2>
+          ${renderRecentPages(recentPages)}
+        </section>
+
+        <section class="content-wrap stack">
+          <h2>Alle Artikel</h2>
+          ${renderPageList(paged.slice)}
+          ${renderPager("/", paged.page, paged.totalPages, {
+            category: selectedCategoryId
+          })}
+        </section>
       </section>
-      ${renderPageList(paged.slice)}
-      ${renderPager("/", paged.page, paged.totalPages, {
-        category: selectedCategoryId
-      })}
     `;
 
     return reply.type("text/html").send(
@@ -765,9 +953,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         <div class="article-main">
           <header>
             <h1>${escapeHtml(page.title)}</h1>
-            <p class="meta">Kategorie: ${escapeHtml(page.categoryName)} | ${
-              page.sensitive ? "Sensibel | " : ""
-            }Zugriff: ${
+            <p class="meta">Kategorie: ${escapeHtml(page.categoryName)} | Profil: ${escapeHtml(
+              formatSecurityProfileLabel(page.securityProfile)
+            )} | Zugriff: ${
               page.visibility === "restricted" ? "eingeschränkt" : "alle"
             } | ${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"} | Integrität: ${
               page.integrityState === "valid"
@@ -841,16 +1029,23 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const draftTags = readSingle(query.tags);
     const draftContent = readSingle(query.content);
     const selectedCategoryId = readSingle(query.categoryId) || defaultCategory.id;
-    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
+    const selectedTemplateId = readSingle(query.template).trim();
+    const legacySensitive = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
+    const requestedSecurityProfile = normalizeSecurityProfileValue(readSingle(query.securityProfile));
     let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : "all";
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers));
     const knownGroupIds = new Set(groups.map((group) => group.id));
     const allowedGroups = normalizeIds(readMany(query.allowedGroups)).filter((groupId) => knownGroupIds.has(groupId));
-    let encrypted = readSingle(query.encrypted) === "1";
-    if (sensitive) {
-      visibility = "restricted";
-      encrypted = true;
-    }
+    const encrypted = readSingle(query.encrypted) === "1";
+    const normalizedSettings = applySecurityProfileToSettings(
+      legacySensitive && requestedSecurityProfile === "standard" ? "sensitive" : requestedSecurityProfile,
+      {
+        visibility,
+        encrypted,
+        sensitive: legacySensitive
+      }
+    );
+    visibility = normalizedSettings.visibility;
 
     const body = renderEditorForm({
       mode: "new",
@@ -863,8 +1058,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       csrfToken: request.csrfToken ?? "",
       categories: categories.map((entry) => ({ id: entry.id, name: entry.name })),
       selectedCategoryId,
-      sensitive,
-      visibility,
+      securityProfile: normalizedSettings.securityProfile,
+      visibility: normalizedSettings.visibility,
       allowedUsers,
       allowedGroups,
       availableUsers: users,
@@ -878,7 +1073,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         defaultContent: template.defaultContent,
         sensitivity: template.sensitivity
       })),
-      encrypted,
+      selectedTemplateId,
+      encrypted: normalizedSettings.encrypted,
       encryptionAvailable: Boolean(config.contentEncryptionKey)
     });
 
@@ -889,7 +1085,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=11"]
+        scripts: ["/wiki-ui.js?v=12"]
       })
     );
   });
@@ -910,27 +1106,29 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
 
-    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(body.sensitive).trim().toLowerCase());
+    const securityProfile = normalizeSecurityProfileValue(readSingle(body.securityProfile));
     let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
     const selectedCategoryId = readSingle(body.categoryId);
-    let encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
-    if (sensitive) {
-      visibility = "restricted";
-      encrypted = true;
-    }
-    if (sensitive && !config.contentEncryptionKey) {
+    const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    const normalizedSettings = applySecurityProfileToSettings(securityProfile, {
+      visibility,
+      encrypted,
+      sensitive: false
+    });
+    visibility = normalizedSettings.visibility;
+    if (normalizedSettings.securityProfile !== "standard" && !config.contentEncryptionKey) {
       const query = buildEditorRedirectQuery({
-        error: "Sensibler Modus benötigt CONTENT_ENCRYPTION_KEY.",
+        error: "Sensibel/Vertraulich benötigt CONTENT_ENCRYPTION_KEY.",
         title,
         slug,
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers: normalizeUsernames(readMany(body.allowedUsers)),
         allowedGroups: normalizeIds(readMany(body.allowedGroups)),
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
       return reply.redirect(`/new?${query}`);
     }
@@ -958,11 +1156,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
         allowedGroups,
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
       return reply.redirect(`/new?${query}`);
     }
@@ -976,11 +1174,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
         allowedGroups,
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
       return reply.redirect(`/new?${query}`);
     }
@@ -989,11 +1187,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slug,
       title,
       categoryId: selectedCategoryId,
-      sensitive,
+      securityProfile: normalizedSettings.securityProfile,
       visibility,
       allowedUsers,
       allowedGroups,
-      encrypted,
+      encrypted: normalizedSettings.encrypted,
       tags,
       content,
       updatedBy: request.currentUser?.username ?? "unknown"
@@ -1007,11 +1205,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
         allowedGroups,
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
       return reply.redirect(`/new?${query}`);
     }
@@ -1069,20 +1267,21 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const tags = readSingle(query.tags) || page.tags.join(", ");
     const content = readSingle(query.content) || page.content;
     const selectedCategoryId = readSingle(query.categoryId) || page.categoryId;
-    const sensitiveRaw = readSingle(query.sensitive).trim().toLowerCase();
-    const sensitive =
-      ["1", "true", "on", "yes"].includes(sensitiveRaw) ? true : ["0", "false", "off", "no"].includes(sensitiveRaw) ? false : page.sensitive;
+    const securityProfileRaw = readSingle(query.securityProfile).trim();
+    const securityProfile = securityProfileRaw ? normalizeSecurityProfileValue(securityProfileRaw) : page.securityProfile;
     let visibility: "all" | "restricted" = readSingle(query.visibility) === "restricted" ? "restricted" : page.visibility;
     const allowedUsers = normalizeUsernames(readMany(query.allowedUsers).length > 0 ? readMany(query.allowedUsers) : page.allowedUsers);
     const knownGroupIds = new Set(groups.map((group) => group.id));
     const allowedGroups = normalizeIds(readMany(query.allowedGroups).length > 0 ? readMany(query.allowedGroups) : page.allowedGroups).filter(
       (groupId) => knownGroupIds.has(groupId)
     );
-    let encrypted = readSingle(query.encrypted) ? readSingle(query.encrypted) === "1" : page.encrypted;
-    if (sensitive) {
-      visibility = "restricted";
-      encrypted = true;
-    }
+    const encrypted = readSingle(query.encrypted) ? readSingle(query.encrypted) === "1" : page.encrypted;
+    const normalizedSettings = applySecurityProfileToSettings(securityProfile, {
+      visibility,
+      encrypted,
+      sensitive: page.sensitive
+    });
+    visibility = normalizedSettings.visibility;
 
     const body = renderEditorForm({
       mode: "edit",
@@ -1096,14 +1295,14 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slugLocked: true,
       categories: categories.map((entry) => ({ id: entry.id, name: entry.name })),
       selectedCategoryId,
-      sensitive,
-      visibility,
+      securityProfile: normalizedSettings.securityProfile,
+      visibility: normalizedSettings.visibility,
       allowedUsers,
       allowedGroups,
       availableUsers: users,
       availableGroups: groups.map((group) => ({ id: group.id, name: group.name, description: group.description })),
       pageTemplates: [],
-      encrypted,
+      encrypted: normalizedSettings.encrypted,
       encryptionAvailable: Boolean(config.contentEncryptionKey)
     });
 
@@ -1114,7 +1313,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=11"]
+        scripts: ["/wiki-ui.js?v=12"]
       })
     );
   });
@@ -1125,7 +1324,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const query = asObject(request.query);
     const selectedCategoryId = readSingle(query.categoryId);
     const pageSlug = readSingle(query.slug).trim().toLowerCase();
-    const sensitiveContext = ["1", "true", "on", "yes"].includes(readSingle(query.sensitive).trim().toLowerCase());
+    const securityProfileContext = normalizeSecurityProfileValue(readSingle(query.securityProfile));
     const encryptedContext = ["1", "true", "on"].includes(readSingle(query.encrypted).trim().toLowerCase());
     const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
     const uploadSubDir = category.uploadFolder.trim() || "allgemein";
@@ -1135,7 +1334,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       return reply.code(400).send({ ok: false, error: "Ungültiges CSRF-Token." });
     }
 
-    if (sensitiveContext || encryptedContext) {
+    if (securityProfileContext !== "standard" || encryptedContext) {
       return reply.code(400).send({
         ok: false,
         error: "Bei sensiblen oder verschlüsselten Artikeln ist Bild-Upload deaktiviert."
@@ -1276,13 +1475,15 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const content = readSingle(body.content);
 
     const selectedCategoryId = readSingle(body.categoryId);
-    const sensitive = ["1", "true", "on", "yes"].includes(readSingle(body.sensitive).trim().toLowerCase());
+    const securityProfile = normalizeSecurityProfileValue(readSingle(body.securityProfile));
     let visibility: "all" | "restricted" = readSingle(body.visibility) === "restricted" ? "restricted" : "all";
-    let encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
-    if (sensitive) {
-      visibility = "restricted";
-      encrypted = true;
-    }
+    const encrypted = readSingle(body.encrypted) === "1" || readSingle(body.encrypted) === "on";
+    const normalizedSettings = applySecurityProfileToSettings(securityProfile, {
+      visibility,
+      encrypted,
+      sensitive: existing.sensitive
+    });
+    visibility = normalizedSettings.visibility;
 
     const knownUsernames = new Set((await listUsers()).filter((user) => !user.disabled).map((user) => user.username.toLowerCase()));
     const knownGroupIds = new Set((await listGroups()).map((group) => group.id));
@@ -1299,18 +1500,18 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       }
     }
 
-    if (sensitive && !config.contentEncryptionKey) {
+    if (normalizedSettings.securityProfile !== "standard" && !config.contentEncryptionKey) {
       const query = buildEditorRedirectQuery({
-        error: "Sensibler Modus benötigt CONTENT_ENCRYPTION_KEY.",
+        error: "Sensibel/Vertraulich benötigt CONTENT_ENCRYPTION_KEY.",
         title,
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
         allowedGroups,
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
 
       return reply.redirect(`/wiki/${encodeURIComponent(params.slug)}/edit?${query}`);
@@ -1320,11 +1521,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slug: params.slug,
       title,
       categoryId: selectedCategoryId,
-      sensitive,
+      securityProfile: normalizedSettings.securityProfile,
       visibility,
       allowedUsers,
       allowedGroups,
-      encrypted,
+      encrypted: normalizedSettings.encrypted,
       tags,
       content,
       updatedBy: request.currentUser?.username ?? "unknown"
@@ -1337,11 +1538,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
-        sensitive,
+        securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
         allowedGroups,
-        encrypted
+        encrypted: normalizedSettings.encrypted
       });
 
       return reply.redirect(`/wiki/${encodeURIComponent(params.slug)}/edit?${query}`);
@@ -1888,59 +2089,179 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const q = readSingle(query.q).trim();
     const activeTag = normalizeTagFilter(readSingle(query.tag));
     const selectedCategoryId = readSingle(query.category);
+    const selectedAuthor = readSingle(query.author).trim().toLowerCase();
+    const selectedTimeframe = readSingle(query.timeframe).trim().toLowerCase();
+    const selectedScope = readSingle(query.scope).trim().toLowerCase() || "all";
     const pageNumber = parsePageNumber(readSingle(query.page));
     const categories = await listCategories();
 
     const hasTextSearch = q.length >= 2;
     const hasTagFilter = activeTag.length > 0;
+    const hasAuthorFilter = selectedAuthor.length > 0;
+    const hasScopeFilter = selectedScope !== "all";
+    const hasTimeframeFilter = ["24h", "7d", "30d", "365d"].includes(selectedTimeframe);
+    const hasCategoryFilter = selectedCategoryId.length > 0;
+    const hasAnyFilter = hasTagFilter || hasAuthorFilter || hasScopeFilter || hasTimeframeFilter || hasCategoryFilter;
 
     const rawResults = hasTextSearch
-      ? await searchPages(q, selectedCategoryId ? { categoryId: selectedCategoryId } : undefined)
-      : hasTagFilter
-        ? await listPagesForUser(request.currentUser, selectedCategoryId ? { categoryId: selectedCategoryId } : undefined)
+      ? await searchPages(q, hasCategoryFilter ? { categoryId: selectedCategoryId } : undefined)
+      : hasAnyFilter
+        ? await listPagesForUser(request.currentUser, hasCategoryFilter ? { categoryId: selectedCategoryId } : undefined)
         : [];
 
     const accessibleResults = hasTextSearch ? await filterAccessiblePageSummaries(rawResults, request.currentUser) : rawResults;
-    const results = hasTagFilter
+    let results = hasTagFilter
       ? accessibleResults.filter((page) => page.tags.some((tag) => tag.toLowerCase() === activeTag))
       : accessibleResults;
+
+    if (hasAuthorFilter) {
+      results = results.filter((page) => page.updatedBy.toLowerCase().includes(selectedAuthor));
+    }
+
+    if (hasScopeFilter) {
+      results = results.filter((page) => {
+        if (selectedScope === "public") return page.visibility === "all" && !page.encrypted;
+        if (selectedScope === "restricted") return page.visibility === "restricted";
+        if (selectedScope === "encrypted") return page.encrypted;
+        if (selectedScope === "unencrypted") return !page.encrypted;
+        return true;
+      });
+    }
+
+    if (hasTimeframeFilter) {
+      const now = Date.now();
+      const ranges: Record<string, number> = {
+        "24h": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000,
+        "365d": 365 * 24 * 60 * 60 * 1000
+      };
+      const rangeMs = ranges[selectedTimeframe] ?? 0;
+      if (rangeMs > 0) {
+        const cutoff = now - rangeMs;
+        results = results.filter((page) => {
+          const updatedAt = Date.parse(page.updatedAt);
+          return Number.isFinite(updatedAt) && updatedAt >= cutoff;
+        });
+      }
+    }
+
     const paged = paginate(results, pageNumber, 20);
 
-    const clearTagParams = new URLSearchParams();
-    if (q) clearTagParams.set("q", q);
-    if (selectedCategoryId) clearTagParams.set("category", selectedCategoryId);
-    const clearTagUrl = clearTagParams.toString().length > 0 ? `/search?${clearTagParams.toString()}` : "/search";
+    const baseParams = new URLSearchParams();
+    if (q) baseParams.set("q", q);
+    if (selectedCategoryId) baseParams.set("category", selectedCategoryId);
+    if (activeTag) baseParams.set("tag", activeTag);
+    if (selectedAuthor) baseParams.set("author", selectedAuthor);
+    if (selectedTimeframe) baseParams.set("timeframe", selectedTimeframe);
+    if (selectedScope && selectedScope !== "all") baseParams.set("scope", selectedScope);
 
     const headline = hasTextSearch
       ? hasTagFilter
         ? `Ergebnisse für <strong>${escapeHtml(q)}</strong> mit Tag <strong>#${escapeHtml(activeTag)}</strong>`
         : `Ergebnisse für <strong>${escapeHtml(q)}</strong>`
-      : hasTagFilter
-        ? `Ergebnisse für Tag <strong>#${escapeHtml(activeTag)}</strong>`
+      : hasAnyFilter
+        ? "Filterergebnisse"
         : q.length > 0
-          ? "Bitte mindestens 2 Zeichen eingeben oder einen Tag auswählen."
-          : "Bitte Suchbegriff eingeben oder Tag auswählen.";
+          ? "Bitte mindestens 2 Zeichen eingeben oder einen Filter ergänzen."
+          : "Bitte Suchbegriff eingeben oder Filter auswählen.";
 
-    const activeFilterBadge = hasTagFilter
-      ? `
-        <div class="search-active-filters">
-          <span class="tag-chip active-filter-badge">#${escapeHtml(activeTag)}</span>
-          <a class="button tiny ghost" href="${escapeHtml(clearTagUrl)}">Tag entfernen</a>
-        </div>
-      `
-      : "";
+    const buildFilterRemovalUrl = (key: string): string => {
+      const params = new URLSearchParams(baseParams);
+      params.delete(key);
+      return params.size > 0 ? `/search?${params.toString()}` : "/search";
+    };
+
+    const activeFilterBadges = [
+      activeTag ? `<a class="tag-chip active-filter-badge" href="${escapeHtml(buildFilterRemovalUrl("tag"))}">#${escapeHtml(activeTag)} ×</a>` : "",
+      selectedCategoryId
+        ? `<a class="tag-chip active-filter-badge" href="${escapeHtml(buildFilterRemovalUrl("category"))}">Kategorie: ${escapeHtml(
+            categories.find((entry) => entry.id === selectedCategoryId)?.name ?? selectedCategoryId
+          )} ×</a>`
+        : "",
+      selectedAuthor ? `<a class="tag-chip active-filter-badge" href="${escapeHtml(buildFilterRemovalUrl("author"))}">Autor: ${escapeHtml(selectedAuthor)} ×</a>` : "",
+      hasTimeframeFilter
+        ? `<a class="tag-chip active-filter-badge" href="${escapeHtml(buildFilterRemovalUrl("timeframe"))}">Zeitraum: ${escapeHtml(
+            selectedTimeframe
+          )} ×</a>`
+        : "",
+      hasScopeFilter
+        ? `<a class="tag-chip active-filter-badge" href="${escapeHtml(buildFilterRemovalUrl("scope"))}">Bereich: ${escapeHtml(selectedScope)} ×</a>`
+        : ""
+    ]
+      .filter((entry) => entry.length > 0)
+      .join("");
 
     const body = `
       <section class="content-wrap">
         <h1>Suche</h1>
-        ${renderCategoryFilter("/search", categories, selectedCategoryId, q, activeTag)}
-        ${activeFilterBadge}
+        <form method="get" action="/search" class="stack search-filter-form">
+          <div class="action-row">
+            <label class="sr-only" for="search-main-q">Suchbegriff</label>
+            <input id="search-main-q" type="search" name="q" value="${escapeHtml(q)}" placeholder="Suchbegriff" />
+            <button type="submit">Suchen</button>
+          </div>
+          <div class="search-filter-grid">
+            <label>Kategorie
+              <select name="category">
+                <option value="">Alle Kategorien</option>
+                ${categories
+                  .map(
+                    (category) =>
+                      `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                        category.name
+                      )}</option>`
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <label>Tag
+              <input type="text" name="tag" value="${escapeHtml(activeTag)}" placeholder="z. B. howto" />
+            </label>
+            <label>Autor
+              <input type="text" name="author" value="${escapeHtml(selectedAuthor)}" placeholder="Benutzername" />
+            </label>
+            <label>Zeitraum
+              <select name="timeframe">
+                <option value="">Beliebig</option>
+                <option value="24h" ${selectedTimeframe === "24h" ? "selected" : ""}>Letzte 24 Stunden</option>
+                <option value="7d" ${selectedTimeframe === "7d" ? "selected" : ""}>Letzte 7 Tage</option>
+                <option value="30d" ${selectedTimeframe === "30d" ? "selected" : ""}>Letzte 30 Tage</option>
+                <option value="365d" ${selectedTimeframe === "365d" ? "selected" : ""}>Letzte 12 Monate</option>
+              </select>
+            </label>
+            <label>Bereich
+              <select name="scope">
+                <option value="all" ${selectedScope === "all" ? "selected" : ""}>Alle</option>
+                <option value="public" ${selectedScope === "public" ? "selected" : ""}>Öffentlich</option>
+                <option value="restricted" ${selectedScope === "restricted" ? "selected" : ""}>Eingeschränkt</option>
+                <option value="encrypted" ${selectedScope === "encrypted" ? "selected" : ""}>Verschlüsselt</option>
+                <option value="unencrypted" ${selectedScope === "unencrypted" ? "selected" : ""}>Unverschlüsselt</option>
+              </select>
+            </label>
+          </div>
+          <div class="action-row">
+            <button type="submit" class="secondary">Filter anwenden</button>
+            <a class="button tiny ghost" href="/search">Zurücksetzen</a>
+          </div>
+        </form>
+        ${activeFilterBadges ? `<div class="search-active-filters">${activeFilterBadges}</div>` : ""}
         <p>${headline}</p>
-        ${renderPageList(paged.slice)}
+        ${renderSearchResultList(paged.slice, {
+          query: q,
+          activeTag,
+          selectedCategoryId,
+          selectedAuthor,
+          selectedTimeframe,
+          selectedScope
+        })}
         ${renderPager("/search", paged.page, paged.totalPages, {
           q,
           category: selectedCategoryId,
-          tag: activeTag
+          tag: activeTag,
+          author: selectedAuthor,
+          timeframe: selectedTimeframe,
+          scope: selectedScope === "all" ? "" : selectedScope
         })}
       </section>
     `;

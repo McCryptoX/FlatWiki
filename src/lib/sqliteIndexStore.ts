@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
   title TEXT NOT NULL,
   categoryId TEXT NOT NULL,
   categoryName TEXT NOT NULL,
+  securityProfile TEXT NOT NULL DEFAULT 'standard',
   sensitive INTEGER NOT NULL DEFAULT 0,
   visibility TEXT NOT NULL,
   allowedUsers TEXT NOT NULL,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS pages (
   tags TEXT NOT NULL,
   excerpt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
+  updatedBy TEXT NOT NULL DEFAULT 'unknown',
   updatedAtMs INTEGER NOT NULL,
   searchableText TEXT NOT NULL
 );
@@ -139,6 +141,8 @@ const ensureSchema = (db: SqlJsDatabase): void => {
   const stmt = db.prepare("PRAGMA table_info(pages)");
   let hasAllowedGroups = false;
   let hasSensitive = false;
+  let hasSecurityProfile = false;
+  let hasUpdatedBy = false;
   try {
     while (stmt.step()) {
       const row = stmt.getAsObject();
@@ -147,6 +151,12 @@ const ensureSchema = (db: SqlJsDatabase): void => {
       }
       if (String(row.name ?? "").trim() === "sensitive") {
         hasSensitive = true;
+      }
+      if (String(row.name ?? "").trim() === "securityProfile") {
+        hasSecurityProfile = true;
+      }
+      if (String(row.name ?? "").trim() === "updatedBy") {
+        hasUpdatedBy = true;
       }
     }
   } finally {
@@ -158,6 +168,12 @@ const ensureSchema = (db: SqlJsDatabase): void => {
   }
   if (!hasSensitive) {
     db.run("ALTER TABLE pages ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasSecurityProfile) {
+    db.run("ALTER TABLE pages ADD COLUMN securityProfile TEXT NOT NULL DEFAULT 'standard'");
+  }
+  if (!hasUpdatedBy) {
+    db.run("ALTER TABLE pages ADD COLUMN updatedBy TEXT NOT NULL DEFAULT 'unknown'");
   }
 };
 
@@ -233,6 +249,14 @@ const normalizeEntry = (entry: SqliteIndexEntry): SqliteIndexEntry => ({
       title,
       categoryId: String(entry.categoryId ?? "").trim() || "default",
       categoryName: String(entry.categoryName ?? "").trim() || "Allgemein",
+      securityProfile:
+        entry.securityProfile === "confidential"
+          ? "confidential"
+          : entry.securityProfile === "sensitive"
+            ? "sensitive"
+            : sensitive
+              ? "sensitive"
+              : "standard",
       sensitive,
       visibility: entry.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: [...entry.allowedUsers].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
@@ -241,6 +265,7 @@ const normalizeEntry = (entry: SqliteIndexEntry): SqliteIndexEntry => ({
       tags,
       excerpt,
       updatedAt: String(entry.updatedAt ?? "").trim(),
+      updatedBy: String(entry.updatedBy ?? "unknown").trim() || "unknown",
       searchableText,
       updatedAtMs: toInt(entry.updatedAtMs)
     };
@@ -267,6 +292,14 @@ const mapRowToEntry = (row: Record<string, unknown>): SqliteIndexEntry => {
     title: title || slug,
     categoryId: String(row.categoryId ?? "").trim() || "default",
     categoryName: String(row.categoryName ?? "").trim() || "Allgemein",
+    securityProfile:
+      row.securityProfile === "confidential"
+        ? "confidential"
+        : row.securityProfile === "sensitive"
+          ? "sensitive"
+          : sensitive
+            ? "sensitive"
+            : "standard",
     sensitive,
     visibility: row.visibility === "restricted" ? "restricted" : "all",
     allowedUsers: parseArray(row.allowedUsers),
@@ -275,6 +308,7 @@ const mapRowToEntry = (row: Record<string, unknown>): SqliteIndexEntry => {
     tags,
     excerpt,
     updatedAt: String(row.updatedAt ?? "").trim(),
+    updatedBy: String(row.updatedBy ?? "unknown").trim() || "unknown",
     searchableText,
     updatedAtMs: toInt(row.updatedAtMs)
   };
@@ -317,12 +351,13 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
   const normalized = normalizeEntry(entry);
   db.run(
     `INSERT INTO pages (
-      slug, title, categoryId, categoryName, sensitive, visibility, allowedUsers, allowedGroups, encrypted, tags, excerpt, updatedAt, updatedAtMs, searchableText
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      slug, title, categoryId, categoryName, securityProfile, sensitive, visibility, allowedUsers, allowedGroups, encrypted, tags, excerpt, updatedAt, updatedBy, updatedAtMs, searchableText
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(slug) DO UPDATE SET
       title = excluded.title,
       categoryId = excluded.categoryId,
       categoryName = excluded.categoryName,
+      securityProfile = excluded.securityProfile,
       sensitive = excluded.sensitive,
       visibility = excluded.visibility,
       allowedUsers = excluded.allowedUsers,
@@ -331,6 +366,7 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
       tags = excluded.tags,
       excerpt = excluded.excerpt,
       updatedAt = excluded.updatedAt,
+      updatedBy = excluded.updatedBy,
       updatedAtMs = excluded.updatedAtMs,
       searchableText = excluded.searchableText`,
     [
@@ -338,6 +374,7 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
       normalized.title,
       normalized.categoryId,
       normalized.categoryName,
+      normalized.securityProfile,
       normalized.sensitive ? 1 : 0,
       normalized.visibility,
       JSON.stringify(normalized.allowedUsers),
@@ -346,6 +383,7 @@ const insertEntry = (db: SqlJsDatabase, entry: SqliteIndexEntry): void => {
       JSON.stringify(normalized.tags),
       normalized.excerpt,
       normalized.updatedAt,
+      normalized.updatedBy,
       normalized.updatedAtMs,
       normalized.searchableText
     ]

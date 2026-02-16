@@ -99,6 +99,13 @@
       .replace(/^-+|-+$/g, "")
       .slice(0, 80);
 
+  const normalizeSecurityProfile = (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "sensitive") return "sensitive";
+    if (normalized === "confidential") return "confidential";
+    return "standard";
+  };
+
   const loadTemplatePresets = (editorShell) => {
     const fallback = [
       {
@@ -106,7 +113,7 @@
         defaultTitle: "",
         defaultTags: [],
         defaultContent: "",
-        sensitivity: "normal"
+        securityProfile: "standard"
       }
     ];
 
@@ -134,7 +141,7 @@
             defaultTitle: String(entry.defaultTitle || ""),
             defaultTags,
             defaultContent: String(entry.defaultContent || ""),
-            sensitivity: entry.sensitivity === "sensitive" ? "sensitive" : "normal"
+            securityProfile: normalizeSecurityProfile(entry.securityProfile)
           };
         })
         .filter((entry) => entry !== null);
@@ -159,9 +166,11 @@
     const tagsInput = editorShell.querySelector('input[name="tags"]');
     const uploadForm = editorShell.querySelector(".image-upload-form");
     const output = editorShell.querySelector(".upload-markdown-output");
-    const sensitiveToggle = editorShell.querySelector('input[name="sensitive"][data-sensitive-toggle], input[name="sensitive"]');
     const encryptionToggle = editorShell.querySelector('input[name="encrypted"][data-encrypted-toggle], input[name="encrypted"]');
     const visibilitySelect = editorShell.querySelector('select[name="visibility"]');
+    const securityProfileInput = editorShell.querySelector('[data-security-profile-input]');
+    const securityProfileButtons = Array.from(editorShell.querySelectorAll("[data-security-profile]"));
+    const securityProfileNotes = Array.from(editorShell.querySelectorAll("[data-security-profile-note]"));
     const restrictedSections = Array.from(editorShell.querySelectorAll("[data-restricted-only]"));
     const accessPickers = restrictedSections
       .map((section) => {
@@ -184,9 +193,8 @@
     const toolbarButtons = editorShell.querySelectorAll("[data-md-action]");
     const previewPanel = editorShell.querySelector(".editor-preview");
     const viewButtons = editorShell.querySelectorAll("[data-editor-view-btn]");
+
     const wizardRoot = editorShell.querySelector("[data-new-page-wizard]");
-    const wizardCategorySelect = wizardRoot ? wizardRoot.querySelector("[data-wizard-category]") : null;
-    const wizardSensitivityNote = wizardRoot ? wizardRoot.querySelector("[data-wizard-sensitivity-note]") : null;
     const wizardStepElements = wizardRoot
       ? {
           one: wizardRoot.querySelector('[data-wizard-step="1"]'),
@@ -197,33 +205,33 @@
     const wizardTemplateButtons = wizardRoot
       ? Array.from(wizardRoot.querySelectorAll("[data-template-id]")).filter((entry) => entry instanceof HTMLButtonElement)
       : [];
-    const wizardSensitivityButtons = wizardRoot
-      ? Array.from(wizardRoot.querySelectorAll("[data-wizard-sensitivity]")).filter((entry) => entry instanceof HTMLButtonElement)
-      : [];
+    const wizardVisibilitySelect = wizardRoot ? wizardRoot.querySelector("[data-wizard-visibility]") : null;
 
     if (!(contentTextarea instanceof HTMLTextAreaElement)) return;
-
-    const hasPreview = previewPanel instanceof HTMLElement;
-    if (!hasPreview) {
-      for (const button of viewButtons) {
-        if (!(button instanceof HTMLButtonElement)) continue;
-        if ((button.dataset.editorViewBtn || "write") === "preview") {
-          button.disabled = true;
-        }
-      }
-    }
 
     const uploadEndpoint = uploadForm instanceof HTMLFormElement ? uploadForm.dataset.uploadEndpoint || "/api/uploads" : "/api/uploads";
     const csrfToken = editorShell.dataset.csrf || (uploadForm instanceof HTMLFormElement ? uploadForm.dataset.csrf || "" : "");
     const previewEndpoint = editorShell.dataset.previewEndpoint || "/api/markdown/preview";
     const pageSlug = (editorShell.dataset.pageSlug || "").trim().toLowerCase();
+    const initialTemplateId = (editorShell.dataset.initialTemplateId || "").trim();
     const uploadDisabledMessage = "Bild-Upload ist für verschlüsselte Artikel deaktiviert.";
+
+    const encryptionAvailable = !(encryptionToggle instanceof HTMLInputElement) || !encryptionToggle.disabled;
 
     let previewTimer = null;
     let previewAbortController = null;
     let currentView = "write";
+    let selectedTemplateId = "";
+    let selectedSecurityProfile = normalizeSecurityProfile(editorShell.dataset.securityProfile || "standard");
+
+    const isUploadHardDisabled = () =>
+      uploadForm instanceof HTMLFormElement && uploadForm.dataset.uploadHardDisabled === "1";
+
+    const isEncryptedSelected = () =>
+      encryptionToggle instanceof HTMLInputElement && encryptionToggle.checked;
 
     const setView = (nextView) => {
+      const hasPreview = previewPanel instanceof HTMLElement;
       currentView = nextView === "preview" && hasPreview ? "preview" : "write";
 
       for (const button of viewButtons) {
@@ -246,7 +254,7 @@
     };
 
     const refreshPreview = async () => {
-      if (!hasPreview) return;
+      if (!(previewPanel instanceof HTMLElement)) return;
 
       if (previewAbortController) {
         previewAbortController.abort();
@@ -312,154 +320,25 @@
       slugInput.dataset.slugAuto = isAuto ? "1" : "0";
     };
 
-    const templatePresets = loadTemplatePresets(editorShell);
-    const templatePresetMap = new Map(templatePresets.map((preset) => [preset.id, preset]));
-    const blankPreset =
-      templatePresetMap.get("blank") || {
-        id: "blank",
-        defaultTitle: "",
-        defaultTags: [],
-        defaultContent: "",
-        sensitivity: "normal"
-      };
-
-    let selectedTemplateId = "";
-    let selectedSensitivity = "";
-
-    const renderWizardStates = () => {
-      if (!wizardRoot || !wizardStepElements) return;
-
-      const step1Done =
-        selectedTemplateId.length > 0 ||
-        (titleInput instanceof HTMLInputElement && titleInput.value.trim().length > 0) ||
-        contentTextarea.value.trim().length > 0;
-      const step2Done = categorySelect instanceof HTMLSelectElement && categorySelect.value.trim().length > 0;
-      const step3Done = selectedSensitivity.length > 0;
-      const firstOpenStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : 3;
-
-      const states = [
-        { element: wizardStepElements.one, done: step1Done, active: firstOpenStep === 1 },
-        { element: wizardStepElements.two, done: step2Done, active: firstOpenStep === 2 },
-        { element: wizardStepElements.three, done: step3Done, active: firstOpenStep === 3 }
-      ];
-
-      for (const state of states) {
-        if (!(state.element instanceof HTMLElement)) continue;
-        state.element.classList.toggle("is-done", state.done);
-        state.element.classList.toggle("is-active", state.active);
+    const applyPickerFilter = (picker) => {
+      const labels = picker.list.querySelectorAll("label[data-search]");
+      const term = picker.filter instanceof HTMLInputElement ? picker.filter.value.trim().toLowerCase() : "";
+      for (const label of labels) {
+        if (!(label instanceof HTMLElement)) continue;
+        const haystack = (label.dataset.search || "").toLowerCase();
+        const visible = term.length === 0 || haystack.includes(term);
+        label.hidden = !visible;
       }
     };
 
-    const setSensitivityVisual = (mode) => {
-      if (!wizardRoot) return;
-      for (const button of wizardSensitivityButtons) {
-        if (!(button instanceof HTMLButtonElement)) continue;
-        button.classList.toggle("is-selected", (button.dataset.wizardSensitivity || "") === mode);
-      }
-      if (wizardSensitivityNote instanceof HTMLElement) {
-        if (mode === "sensitive") {
-          wizardSensitivityNote.textContent =
-            encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled
-              ? "Sensibel aktiv: Zugriff nur ausgewählt + Verschlüsselung aktiviert. Keine PIN/TAN im Klartext speichern."
-              : "Sensibel derzeit nicht möglich: CONTENT_ENCRYPTION_KEY fehlt.";
-        } else {
-          wizardSensitivityNote.textContent = "Standard aktiv: Alle angemeldeten Benutzer mit Zugriff.";
-        }
-      }
+    const syncPickerCount = (picker) => {
+      if (!(picker.count instanceof HTMLElement)) return;
+      const checkboxes = picker.list.querySelectorAll('input[type="checkbox"]');
+      const allCount = checkboxes.length;
+      const selectedCount = picker.list.querySelectorAll('input[type="checkbox"]:checked').length;
+      const visibleCount = picker.list.querySelectorAll("label[data-search]:not([hidden])").length;
+      picker.count.textContent = `${selectedCount}/${allCount} ausgewählt, ${visibleCount} sichtbar`;
     };
-
-    const setSensitiveFlag = (active) => {
-      if (!(sensitiveToggle instanceof HTMLInputElement)) return;
-      sensitiveToggle.checked = Boolean(active);
-    };
-
-    const isSensitiveSelected = () => sensitiveToggle instanceof HTMLInputElement && sensitiveToggle.checked;
-
-    const applySensitivity = (mode) => {
-      if (!(visibilitySelect instanceof HTMLSelectElement)) return;
-      const wantsSensitive = mode === "sensitive";
-      if (wantsSensitive && encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
-        selectedSensitivity = "normal";
-        setSensitiveFlag(false);
-        visibilitySelect.value = "all";
-        visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
-        setSensitivityVisual("normal");
-        renderWizardStates();
-        return;
-      }
-
-      selectedSensitivity = wantsSensitive ? "sensitive" : "normal";
-      setSensitiveFlag(selectedSensitivity === "sensitive");
-      visibilitySelect.value = selectedSensitivity === "sensitive" ? "restricted" : "all";
-      visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
-
-      if (encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled) {
-        encryptionToggle.checked = selectedSensitivity === "sensitive";
-        encryptionToggle.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-
-      setSensitivityVisual(selectedSensitivity);
-      renderWizardStates();
-    };
-
-    const syncSensitivityFromForm = () => {
-      if (!(visibilitySelect instanceof HTMLSelectElement)) return;
-      if (isSensitiveSelected()) {
-        selectedSensitivity = "sensitive";
-        visibilitySelect.value = "restricted";
-        if (encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled) {
-          encryptionToggle.checked = true;
-        }
-      } else {
-        selectedSensitivity = "normal";
-      }
-      setSensitivityVisual(selectedSensitivity);
-      renderWizardStates();
-    };
-
-    const applyTemplatePreset = (templateId) => {
-      if (!(titleInput instanceof HTMLInputElement) || !(tagsInput instanceof HTMLInputElement)) return;
-      const normalizedTemplateId = String(templateId || "").trim();
-      const preset = templatePresetMap.get(normalizedTemplateId) || blankPreset;
-      const resolvedTemplateId = templatePresetMap.has(normalizedTemplateId)
-        ? normalizedTemplateId
-        : blankPreset.id;
-
-      const shouldConfirmReplace =
-        contentTextarea.value.trim().length > 0 &&
-        contentTextarea.value.trim() !== String(preset.defaultContent || "").trim();
-      if (shouldConfirmReplace && !window.confirm("Vorlage anwenden und vorhandenen Inhalt ersetzen?")) {
-        return;
-      }
-
-      selectedTemplateId = resolvedTemplateId;
-      titleInput.value = preset.defaultTitle || "";
-      tagsInput.value = Array.isArray(preset.defaultTags) ? preset.defaultTags.join(", ") : "";
-      contentTextarea.value = preset.defaultContent || "";
-      contentTextarea.dispatchEvent(new Event("input", { bubbles: true }));
-      applySensitivity(preset.sensitivity === "sensitive" ? "sensitive" : "normal");
-
-      if (slugInput instanceof HTMLInputElement && !slugInput.readOnly) {
-        slugInput.dataset.slugAuto = "1";
-        slugInput.value = slugify(titleInput.value);
-      }
-
-      for (const button of wizardTemplateButtons) {
-        if (!(button instanceof HTMLButtonElement)) continue;
-        button.classList.toggle("is-selected", (button.dataset.templateId || "") === resolvedTemplateId);
-      }
-
-      renderWizardStates();
-      if (currentView === "preview") {
-        void refreshPreview();
-      }
-    };
-
-    const isUploadHardDisabled = () =>
-      uploadForm instanceof HTMLFormElement && uploadForm.dataset.uploadHardDisabled === "1";
-
-    const isEncryptedSelected = () =>
-      encryptionToggle instanceof HTMLInputElement && !encryptionToggle.disabled && encryptionToggle.checked;
 
     const syncUploadAvailability = () => {
       if (!(uploadForm instanceof HTMLFormElement)) return;
@@ -482,24 +361,144 @@
       }
     };
 
-    const applyPickerFilter = (picker) => {
-      const labels = picker.list.querySelectorAll("label[data-search]");
-      const term = picker.filter instanceof HTMLInputElement ? picker.filter.value.trim().toLowerCase() : "";
-      for (const label of labels) {
-        if (!(label instanceof HTMLElement)) continue;
-        const haystack = (label.dataset.search || "").toLowerCase();
-        const visible = term.length === 0 || haystack.includes(term);
-        label.hidden = !visible;
+    const setSecurityProfileNoteText = () => {
+      const text =
+        selectedSecurityProfile === "confidential"
+          ? "Vertraulich: Zugriff nur ausgewählt und immer verschlüsselt. Für hochkritische Inhalte."
+          : selectedSecurityProfile === "sensitive"
+            ? "Sensibel: Zugriff nur ausgewählt und immer verschlüsselt."
+            : "Standard: freie Auswahl von Zugriff und Verschlüsselung.";
+      for (const element of securityProfileNotes) {
+        if (element instanceof HTMLElement) {
+          element.textContent = text;
+        }
       }
     };
 
-    const syncPickerCount = (picker) => {
-      if (!(picker.count instanceof HTMLElement)) return;
-      const checkboxes = picker.list.querySelectorAll('input[type="checkbox"]');
-      const allCount = checkboxes.length;
-      const selectedCount = picker.list.querySelectorAll('input[type="checkbox"]:checked').length;
-      const visibleCount = picker.list.querySelectorAll("label[data-search]:not([hidden])").length;
-      picker.count.textContent = `${selectedCount}/${allCount} ausgewählt, ${visibleCount} sichtbar`;
+    const renderSecurityProfileButtons = () => {
+      for (const button of securityProfileButtons) {
+        if (!(button instanceof HTMLButtonElement)) continue;
+        const profile = normalizeSecurityProfile(button.dataset.securityProfile || "standard");
+        button.classList.toggle("is-selected", profile === selectedSecurityProfile);
+      }
+    };
+
+    const enforceProfileRules = () => {
+      if (!(visibilitySelect instanceof HTMLSelectElement)) return;
+
+      if (selectedSecurityProfile !== "standard") {
+        visibilitySelect.value = "restricted";
+      }
+
+      if (encryptionToggle instanceof HTMLInputElement) {
+        if (selectedSecurityProfile !== "standard") {
+          encryptionToggle.checked = true;
+          encryptionToggle.disabled = true;
+        } else {
+          encryptionToggle.disabled = !encryptionAvailable;
+        }
+      }
+
+      if (securityProfileInput instanceof HTMLInputElement) {
+        securityProfileInput.value = selectedSecurityProfile;
+      }
+
+      if (wizardVisibilitySelect instanceof HTMLSelectElement) {
+        wizardVisibilitySelect.value = visibilitySelect.value;
+      }
+
+      setSecurityProfileNoteText();
+      renderSecurityProfileButtons();
+      syncRestrictedVisibility();
+      syncUploadAvailability();
+    };
+
+    const applySecurityProfile = (nextProfile) => {
+      const normalized = normalizeSecurityProfile(nextProfile);
+      if (normalized !== "standard" && !encryptionAvailable) {
+        selectedSecurityProfile = "standard";
+      } else {
+        selectedSecurityProfile = normalized;
+      }
+      enforceProfileRules();
+      renderWizardStates();
+    };
+
+    const renderWizardStates = () => {
+      if (!wizardRoot || !wizardStepElements) return;
+
+      const step1Done =
+        selectedTemplateId.length > 0 ||
+        (titleInput instanceof HTMLInputElement && titleInput.value.trim().length > 0) ||
+        contentTextarea.value.trim().length > 0;
+      const step2Done =
+        selectedSecurityProfile.length > 0 &&
+        visibilitySelect instanceof HTMLSelectElement &&
+        visibilitySelect.value.trim().length > 0;
+      const step3Done =
+        titleInput instanceof HTMLInputElement && titleInput.value.trim().length > 1 && contentTextarea.value.trim().length > 0;
+      const firstOpenStep = !step1Done ? 1 : !step2Done ? 2 : 3;
+
+      const states = [
+        { element: wizardStepElements.one, done: step1Done, active: firstOpenStep === 1 },
+        { element: wizardStepElements.two, done: step2Done, active: firstOpenStep === 2 },
+        { element: wizardStepElements.three, done: step3Done, active: firstOpenStep === 3 }
+      ];
+
+      for (const state of states) {
+        if (!(state.element instanceof HTMLElement)) continue;
+        state.element.classList.toggle("is-done", state.done);
+        state.element.classList.toggle("is-active", state.active);
+      }
+    };
+
+    const templatePresets = loadTemplatePresets(editorShell);
+    const templatePresetMap = new Map(templatePresets.map((preset) => [preset.id, preset]));
+    const blankPreset =
+      templatePresetMap.get("blank") || {
+        id: "blank",
+        defaultTitle: "",
+        defaultTags: [],
+        defaultContent: "",
+        securityProfile: "standard"
+      };
+
+    const applyTemplatePreset = (templateId) => {
+      if (!(titleInput instanceof HTMLInputElement) || !(tagsInput instanceof HTMLInputElement)) return;
+      const normalizedTemplateId = String(templateId || "").trim();
+      const preset = templatePresetMap.get(normalizedTemplateId) || blankPreset;
+      const resolvedTemplateId = templatePresetMap.has(normalizedTemplateId)
+        ? normalizedTemplateId
+        : blankPreset.id;
+
+      const shouldConfirmReplace =
+        contentTextarea.value.trim().length > 0 &&
+        contentTextarea.value.trim() !== String(preset.defaultContent || "").trim();
+      if (shouldConfirmReplace && !window.confirm("Vorlage anwenden und vorhandenen Inhalt ersetzen?")) {
+        return;
+      }
+
+      selectedTemplateId = resolvedTemplateId;
+      titleInput.value = preset.defaultTitle || "";
+      tagsInput.value = Array.isArray(preset.defaultTags) ? preset.defaultTags.join(", ") : "";
+      contentTextarea.value = preset.defaultContent || "";
+      contentTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      applySecurityProfile(preset.securityProfile || "standard");
+
+      if (slugInput instanceof HTMLInputElement && !slugInput.readOnly) {
+        slugInput.dataset.slugAuto = "1";
+        slugInput.value = slugify(titleInput.value);
+      }
+
+      for (const button of wizardTemplateButtons) {
+        if (!(button instanceof HTMLButtonElement)) continue;
+        button.classList.toggle("is-selected", (button.dataset.templateId || "") === resolvedTemplateId);
+      }
+
+      renderWizardStates();
+      if (currentView === "preview") {
+        void refreshPreview();
+      }
     };
 
     for (const button of toolbarButtons) {
@@ -518,59 +517,28 @@
       });
     }
 
+    for (const button of securityProfileButtons) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      button.addEventListener("click", () => {
+        const profile = button.dataset.securityProfile || "standard";
+        applySecurityProfile(profile);
+      });
+    }
+
+    for (const button of wizardTemplateButtons) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      button.addEventListener("click", () => {
+        applyTemplatePreset(button.dataset.templateId || "blank");
+      });
+    }
+
     contentTextarea.addEventListener("input", schedulePreview);
     setView("write");
-    syncRestrictedVisibility();
+
     for (const picker of accessPickers) {
       applyPickerFilter(picker);
       syncPickerCount(picker);
-    }
 
-    if (visibilitySelect instanceof HTMLSelectElement) {
-      visibilitySelect.addEventListener("change", () => {
-        if (isSensitiveSelected() && visibilitySelect.value !== "restricted") {
-          visibilitySelect.value = "restricted";
-        }
-        syncRestrictedVisibility();
-        syncSensitivityFromForm();
-        for (const picker of accessPickers) {
-          syncPickerCount(picker);
-        }
-      });
-    }
-
-    if (encryptionToggle instanceof HTMLInputElement) {
-      encryptionToggle.addEventListener("change", () => {
-        if (isSensitiveSelected() && !encryptionToggle.checked && !encryptionToggle.disabled) {
-          encryptionToggle.checked = true;
-        }
-        syncSensitivityFromForm();
-        syncUploadAvailability();
-      });
-    }
-
-    if (sensitiveToggle instanceof HTMLInputElement) {
-      if (encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
-        sensitiveToggle.checked = false;
-        sensitiveToggle.disabled = true;
-      }
-      sensitiveToggle.addEventListener("change", () => {
-        if (sensitiveToggle.checked) {
-          if (encryptionToggle instanceof HTMLInputElement && encryptionToggle.disabled) {
-            sensitiveToggle.checked = false;
-          } else {
-            applySensitivity("sensitive");
-            return;
-          }
-        } else {
-          applySensitivity("normal");
-          return;
-        }
-        syncSensitivityFromForm();
-      });
-    }
-
-    for (const picker of accessPickers) {
       if (picker.filter instanceof HTMLInputElement) {
         picker.filter.addEventListener("input", () => {
           applyPickerFilter(picker);
@@ -583,6 +551,36 @@
         if (target instanceof HTMLInputElement && target.type === "checkbox") {
           syncPickerCount(picker);
         }
+      });
+    }
+
+    if (visibilitySelect instanceof HTMLSelectElement) {
+      visibilitySelect.addEventListener("change", () => {
+        if (selectedSecurityProfile !== "standard" && visibilitySelect.value !== "restricted") {
+          visibilitySelect.value = "restricted";
+        }
+        if (wizardVisibilitySelect instanceof HTMLSelectElement) {
+          wizardVisibilitySelect.value = visibilitySelect.value;
+        }
+        syncRestrictedVisibility();
+        renderWizardStates();
+      });
+    }
+
+    if (wizardVisibilitySelect instanceof HTMLSelectElement && visibilitySelect instanceof HTMLSelectElement) {
+      wizardVisibilitySelect.value = visibilitySelect.value;
+      wizardVisibilitySelect.addEventListener("change", () => {
+        visibilitySelect.value = wizardVisibilitySelect.value;
+        visibilitySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+
+    if (encryptionToggle instanceof HTMLInputElement) {
+      encryptionToggle.addEventListener("change", () => {
+        if (selectedSecurityProfile !== "standard") {
+          encryptionToggle.checked = true;
+        }
+        syncUploadAvailability();
       });
     }
 
@@ -600,38 +598,6 @@
       });
       slugInput.addEventListener("blur", () => {
         updateSlugAutoState();
-      });
-    }
-
-    if (categorySelect instanceof HTMLSelectElement) {
-      categorySelect.addEventListener("change", () => {
-        if (wizardCategorySelect instanceof HTMLSelectElement) {
-          wizardCategorySelect.value = categorySelect.value;
-        }
-        renderWizardStates();
-      });
-    }
-
-    if (wizardCategorySelect instanceof HTMLSelectElement && categorySelect instanceof HTMLSelectElement) {
-      wizardCategorySelect.addEventListener("change", () => {
-        categorySelect.value = wizardCategorySelect.value;
-        categorySelect.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      wizardCategorySelect.value = categorySelect.value;
-    }
-
-    for (const button of wizardTemplateButtons) {
-      if (!(button instanceof HTMLButtonElement)) continue;
-      button.addEventListener("click", () => {
-        applyTemplatePreset(button.dataset.templateId || "blank");
-      });
-    }
-
-    for (const button of wizardSensitivityButtons) {
-      if (!(button instanceof HTMLButtonElement)) continue;
-      button.addEventListener("click", () => {
-        const mode = button.dataset.wizardSensitivity || "normal";
-        applySensitivity(mode);
       });
     }
 
@@ -662,6 +628,9 @@
           const params = new URLSearchParams();
           if (categorySelect instanceof HTMLSelectElement && categorySelect.value.trim().length > 0) {
             params.set("categoryId", categorySelect.value.trim());
+          }
+          if (securityProfileInput instanceof HTMLInputElement && securityProfileInput.value.trim().length > 0) {
+            params.set("securityProfile", normalizeSecurityProfile(securityProfileInput.value));
           }
           if (isEncryptedSelected()) {
             params.set("encrypted", "1");
@@ -700,11 +669,15 @@
       });
     }
 
-    syncUploadAvailability();
     syncSlugFromTitle();
     updateSlugAutoState();
-    syncSensitivityFromForm();
-    renderWizardStates();
+    applySecurityProfile(selectedSecurityProfile);
+
+    if (initialTemplateId) {
+      applyTemplatePreset(initialTemplateId);
+    } else {
+      renderWizardStates();
+    }
 
     contentTextarea.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {

@@ -49,7 +49,7 @@ export interface SearchIndexInfo {
   fileSizeBytes: number;
 }
 
-const INDEX_VERSION = 4;
+const INDEX_VERSION = 5;
 
 const isSqliteBackend = (): boolean => getIndexBackend() === "sqlite";
 
@@ -100,6 +100,14 @@ const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry 
       title,
       categoryId: String(entry.categoryId ?? "").trim(),
       categoryName: String(entry.categoryName ?? "").trim(),
+      securityProfile:
+        entry.securityProfile === "confidential"
+          ? "confidential"
+          : entry.securityProfile === "sensitive"
+            ? "sensitive"
+            : sensitive
+              ? "sensitive"
+              : "standard",
       sensitive,
       visibility: entry.visibility === "restricted" ? "restricted" : "all",
       allowedUsers: Array.isArray(entry.allowedUsers)
@@ -112,6 +120,7 @@ const normalizeIndexEntry = (entry: SearchIndexPageEntry): SearchIndexPageEntry 
       tags,
       excerpt,
       updatedAt: String(entry.updatedAt ?? "").trim(),
+      updatedBy: String(entry.updatedBy ?? "unknown").trim() || "unknown",
       searchableText,
       updatedAtMs: Number.isFinite(entry.updatedAtMs) ? entry.updatedAtMs : toSafeTimestamp(String(entry.updatedAt ?? ""))
     };
@@ -136,6 +145,7 @@ const buildEntrySignature = (
     | "title"
     | "categoryId"
     | "categoryName"
+    | "securityProfile"
     | "sensitive"
     | "visibility"
     | "allowedUsers"
@@ -144,6 +154,7 @@ const buildEntrySignature = (
     | "tags"
     | "excerpt"
     | "updatedAt"
+    | "updatedBy"
   >
 ): string => {
   const allowedUsers = [...entry.allowedUsers].map((value) => value.trim().toLowerCase()).sort().join(",");
@@ -154,6 +165,7 @@ const buildEntrySignature = (
     entry.title.trim(),
     entry.categoryId.trim(),
     entry.categoryName.trim(),
+    entry.securityProfile,
     entry.sensitive ? "1" : "0",
     entry.visibility,
     allowedUsers,
@@ -161,7 +173,8 @@ const buildEntrySignature = (
     entry.encrypted ? "1" : "0",
     tags,
     entry.excerpt.trim(),
-    entry.updatedAt.trim()
+    entry.updatedAt.trim(),
+    entry.updatedBy.trim().toLowerCase()
   ].join("|");
 };
 
@@ -189,6 +202,7 @@ const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
     title: page.title,
     categoryId: page.categoryId,
     categoryName: page.categoryName,
+    securityProfile: page.securityProfile,
     sensitive: page.sensitive,
     visibility: page.visibility,
     allowedUsers: page.allowedUsers,
@@ -196,7 +210,8 @@ const buildIndexEntryFromPage = (page: WikiPage): SearchIndexPageEntry => {
     encrypted: page.encrypted,
     tags: page.tags,
     excerpt,
-    updatedAt: page.updatedAt
+    updatedAt: page.updatedAt,
+    updatedBy: page.updatedBy
   };
 
   const content = page.encrypted || page.sensitive || isIntegrityBroken ? "" : page.content;
@@ -476,6 +491,7 @@ const removeSearchIndexBySlugFlat = async (slug: string): Promise<{ updated: boo
       | "title"
       | "categoryId"
       | "categoryName"
+      | "securityProfile"
       | "sensitive"
       | "visibility"
       | "allowedUsers"
@@ -484,6 +500,7 @@ const removeSearchIndexBySlugFlat = async (slug: string): Promise<{ updated: boo
       | "tags"
       | "excerpt"
       | "updatedAt"
+      | "updatedBy"
     >
   >
 ): string => {
