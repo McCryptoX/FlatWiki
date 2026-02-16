@@ -12,11 +12,13 @@ import { ensureDir } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
 import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
+import { buildUnifiedDiff } from "../lib/textDiff.js";
 import { listUsers } from "../lib/userStore.js";
 import {
   canUserAccessPage,
   deletePage,
   filterAccessiblePageSummaries,
+  getCurrentPageRawContent,
   getPage,
   getPageVersionRawContent,
   isValidSlug,
@@ -250,6 +252,68 @@ const formatHistoryReason = (reason: string): string => {
   if (reason === "delete") return "Löschen";
   if (reason === "restore-backup") return "Restore-Sicherung";
   return "Bearbeiten";
+};
+
+const renderDiffLineNumber = (value: number | undefined): string => {
+  if (typeof value !== "number") return "";
+  return String(value);
+};
+
+const renderHistoryDiff = (fromText: string, toText: string): { html: string; addedLines: number; removedLines: number; changed: boolean } => {
+  const diff = buildUnifiedDiff(fromText, toText, { contextLines: 3 });
+
+  const rows = diff.lines
+    .map((line) => {
+      if (line.type === "skip") {
+        const oldCount = Math.max(0, line.hiddenOldLines ?? 0);
+        const newCount = Math.max(0, line.hiddenNewLines ?? 0);
+        return `
+          <tr class="diff-row diff-skip">
+            <td class="diff-line-no"></td>
+            <td class="diff-line-no"></td>
+            <td class="diff-line-content">… ${oldCount}/${newCount} unveränderte Zeilen ausgeblendet …</td>
+          </tr>
+        `;
+      }
+
+      const rowClass =
+        line.type === "add"
+          ? "diff-row diff-add"
+          : line.type === "del"
+            ? "diff-row diff-del"
+            : "diff-row diff-context";
+
+      return `
+        <tr class="${rowClass}">
+          <td class="diff-line-no">${renderDiffLineNumber(line.oldLineNumber)}</td>
+          <td class="diff-line-no">${renderDiffLineNumber(line.newLineNumber)}</td>
+          <td class="diff-line-content"><code>${escapeHtml(line.text ?? "")}</code></td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return {
+    html: `
+      <div class="table-wrap history-diff-wrap">
+        <table class="history-diff-table">
+          <thead>
+            <tr>
+              <th>Alt</th>
+              <th>Neu</th>
+              <th>Inhalt</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
+    `,
+    addedLines: diff.addedLines,
+    removedLines: diff.removedLines,
+    changed: diff.changed
+  };
 };
 
 const normalizeTagFilter = (value: string): string => {
@@ -650,7 +714,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        error: readSingle(asObject(request.query).error)
+        error: readSingle(asObject(request.query).error),
+        scripts: articleToc ? ["/article-toc.js?v=1"] : undefined
       })
     );
   });
@@ -1211,9 +1276,16 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                                 : "-"
                             }</td>
                             <td>${Math.max(1, Math.round(version.sizeBytes / 1024))} KB</td>
-                            <td><a class="button tiny secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(
-                              version.id
-                            )}">Ansehen</a></td>
+                            <td>
+                              <div class="action-row">
+                                <a class="button tiny secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(
+                                  version.id
+                                )}">Ansehen</a>
+                                <a class="button tiny secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(
+                                  version.id
+                                )}/diff">Diff</a>
+                              </div>
+                            </td>
                           </tr>
                         `
                       )
@@ -1297,6 +1369,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           </div>
           <div class="action-row">
             <a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history">Zur Historie</a>
+            <a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(params.versionId)}/diff">Diff anzeigen</a>
             ${
               page
                 ? `<a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}">Zur Seite</a>`
@@ -1341,6 +1414,189 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         csrfToken: request.csrfToken,
         error: readSingle(asObject(request.query).error),
         notice: readSingle(asObject(request.query).notice)
+      })
+    );
+  });
+
+  app.get("/wiki/:slug/history/:versionId/diff", { preHandler: [requireAuth] }, async (request, reply) => {
+    const params = request.params as { slug: string; versionId: string };
+    const query = asObject(request.query);
+    const normalizedSlug = params.slug.trim().toLowerCase();
+    const page = await getPage(normalizedSlug);
+
+    if (page && !canUserAccessPage(page, request.currentUser)) {
+      return reply
+        .code(403)
+        .type("text/html")
+        .send(
+          renderLayout({
+            title: "Kein Zugriff",
+            user: request.currentUser,
+            csrfToken: request.csrfToken,
+            body: `<section class="content-wrap"><h1>Kein Zugriff</h1><p>Du hast keine Berechtigung für diesen Artikel.</p></section>`
+          })
+        );
+    }
+
+    if (!page && request.currentUser?.role !== "admin") {
+      return reply
+        .code(403)
+        .type("text/html")
+        .send(
+          renderLayout({
+            title: "Kein Zugriff",
+            user: request.currentUser,
+            csrfToken: request.csrfToken,
+            body: `<section class="content-wrap"><h1>Kein Zugriff</h1><p>Historie gelöschter Seiten ist nur für Admins sichtbar.</p></section>`
+          })
+        );
+    }
+
+    const versions = await listPageHistory(normalizedSlug, 250);
+    const versionIndex = versions.findIndex((entry) => entry.id === params.versionId);
+    const fromVersion = versionIndex >= 0 ? versions[versionIndex] : null;
+    const fromRawContent = await getPageVersionRawContent(normalizedSlug, params.versionId);
+
+    if (!fromVersion || fromRawContent === null) {
+      return reply
+        .code(404)
+        .type("text/html")
+        .send(
+          renderLayout({
+            title: "Version nicht gefunden",
+            user: request.currentUser,
+            csrfToken: request.csrfToken,
+            body: `<section class="content-wrap"><h1>Version nicht gefunden</h1><p>Diese Version existiert nicht.</p></section>`
+          })
+        );
+    }
+
+    const selectableVersions = versions.filter((entry) => entry.id !== fromVersion.id);
+    const selectableVersionIds = new Set(selectableVersions.map((entry) => entry.id));
+    const requestedCompareTo = readSingle(query.compareTo).trim();
+
+    let compareTo = requestedCompareTo;
+    if (compareTo === "current" && !page) {
+      compareTo = "";
+    }
+    if (compareTo && compareTo !== "current" && !selectableVersionIds.has(compareTo)) {
+      compareTo = "";
+    }
+
+    if (!compareTo) {
+      const newerVersion = versionIndex > 0 ? versions[versionIndex - 1] : null;
+      if (newerVersion) {
+        compareTo = newerVersion.id;
+      } else if (page) {
+        compareTo = "current";
+      } else {
+        const olderVersion = versions[versionIndex + 1];
+        compareTo = olderVersion?.id ?? "";
+      }
+    }
+
+    let compareLabel = "";
+    let compareMeta = "";
+    let compareRawContent: string | null = null;
+
+    if (compareTo === "current") {
+      compareLabel = "Aktueller Stand";
+      compareMeta = page ? `${formatDate(page.updatedAt)} / ${page.updatedBy}` : "-";
+      compareRawContent = await getCurrentPageRawContent(normalizedSlug);
+      if (compareRawContent === null && page) {
+        compareRawContent = page.content;
+      }
+    } else if (compareTo) {
+      const compareVersion = selectableVersions.find((entry) => entry.id === compareTo) ?? null;
+      if (compareVersion) {
+        compareLabel = `Version ${formatDate(compareVersion.createdAt)}`;
+        compareMeta = `${formatHistoryReason(compareVersion.reason)} / ${compareVersion.createdBy}`;
+        compareRawContent = await getPageVersionRawContent(normalizedSlug, compareVersion.id);
+      }
+    }
+
+    if (compareRawContent === null) {
+      return reply
+        .code(404)
+        .type("text/html")
+        .send(
+          renderLayout({
+            title: "Vergleich nicht möglich",
+            user: request.currentUser,
+            csrfToken: request.csrfToken,
+            body: `<section class="content-wrap"><h1>Vergleich nicht möglich</h1><p>Die gewählte Vergleichsversion konnte nicht geladen werden.</p></section>`
+          })
+        );
+    }
+
+    const diff = renderHistoryDiff(fromRawContent, compareRawContent);
+    const compareOptions = [
+      ...(page
+        ? [
+            `<option value="current" ${compareTo === "current" ? "selected" : ""}>Aktueller Stand${page ? ` (${escapeHtml(formatDate(page.updatedAt))})` : ""}</option>`
+          ]
+        : []),
+      ...selectableVersions.map(
+        (entry) =>
+          `<option value="${escapeHtml(entry.id)}" ${compareTo === entry.id ? "selected" : ""}>${escapeHtml(formatDate(entry.createdAt))} - ${escapeHtml(
+            formatHistoryReason(entry.reason)
+          )} (${escapeHtml(entry.createdBy)})</option>`
+      )
+    ].join("");
+
+    const body = `
+      <section class="content-wrap stack large">
+        <div class="page-header">
+          <div>
+            <h1>Versions-Diff</h1>
+            <p>${escapeHtml(page?.title ?? normalizedSlug)} (${escapeHtml(normalizedSlug)})</p>
+          </div>
+          <div class="action-row">
+            <a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(fromVersion.id)}">Version ansehen</a>
+            <a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}/history">Zur Historie</a>
+            ${
+              page
+                ? `<a class="button secondary" href="/wiki/${encodeURIComponent(normalizedSlug)}">Zur Seite</a>`
+                : '<a class="button secondary" href="/">Zur Übersicht</a>'
+            }
+          </div>
+        </div>
+
+        <div class="history-meta-grid">
+          <div><strong>Von:</strong> ${escapeHtml(formatDate(fromVersion.createdAt))}</div>
+          <div><strong>Typ:</strong> ${escapeHtml(formatHistoryReason(fromVersion.reason))}</div>
+          <div><strong>Autor:</strong> ${escapeHtml(fromVersion.createdBy)}</div>
+          <div><strong>Nach:</strong> ${escapeHtml(compareLabel)}</div>
+          <div><strong>Nach-Meta:</strong> ${escapeHtml(compareMeta || "-")}</div>
+        </div>
+
+        <form method="get" action="/wiki/${encodeURIComponent(normalizedSlug)}/history/${encodeURIComponent(fromVersion.id)}/diff" class="action-row">
+          <label>Vergleichen mit
+            <select name="compareTo" class="tiny">
+              ${compareOptions}
+            </select>
+          </label>
+          <button type="submit" class="tiny secondary">Diff aktualisieren</button>
+        </form>
+
+        <div class="card-meta">
+          <span class="meta-pill">+${diff.addedLines} Zeilen</span>
+          <span class="meta-pill">-${diff.removedLines} Zeilen</span>
+          <span class="meta-pill">${diff.changed ? "Änderungen gefunden" : "Keine Änderungen"}</span>
+        </div>
+
+        ${diff.html}
+      </section>
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Versions-Diff",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        error: readSingle(query.error),
+        notice: readSingle(query.notice)
       })
     );
   });

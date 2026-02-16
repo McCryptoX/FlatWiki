@@ -917,12 +917,24 @@ th {
 }
 
 .article-toc a {
+  display: inline-block;
+  width: 100%;
+  padding: 0.18rem 0.38rem;
+  border-radius: 8px;
   text-decoration: none;
   color: var(--muted);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .article-toc a:hover {
   color: var(--ink);
+  background: #eef8f4;
+}
+
+.article-toc a.is-active {
+  color: var(--accent);
+  background: #def3ec;
+  font-weight: 600;
 }
 
 .meta {
@@ -988,6 +1000,53 @@ th {
   background: #f7fbfa;
   overflow: auto;
   max-height: 60dvh;
+}
+
+.history-diff-wrap {
+  max-height: 70dvh;
+  overflow: auto;
+}
+
+.history-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.history-diff-table td,
+.history-diff-table th {
+  vertical-align: top;
+}
+
+.diff-line-no {
+  width: 64px;
+  min-width: 64px;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.diff-line-content code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: transparent;
+}
+
+.diff-row.diff-add td {
+  background: #e9f8f1;
+}
+
+.diff-row.diff-del td {
+  background: #fdecea;
+}
+
+.diff-row.diff-context td {
+  background: #fff;
+}
+
+.diff-row.diff-skip td {
+  color: var(--muted);
+  font-style: italic;
+  background: #f5f8f7;
 }
 
 hr {
