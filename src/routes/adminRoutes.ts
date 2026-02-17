@@ -7,7 +7,7 @@ import { requireAdmin, verifySessionCsrfToken } from "../lib/auth.js";
 import { writeAuditLog } from "../lib/audit.js";
 import { config } from "../config.js";
 import { removeFile } from "../lib/fileStore.js";
-import { createCategory, listCategories, renameCategory } from "../lib/categoryStore.js";
+import { createCategory, findCategoryById, getDefaultCategory, listCategories, renameCategory } from "../lib/categoryStore.js";
 import {
   createGroup,
   deleteGroup,
@@ -22,7 +22,8 @@ import {
   ensureSearchIndexConsistency,
   getSearchIndexBuildStatus,
   getSearchIndexInfo,
-  startSearchIndexRebuild
+  startSearchIndexRebuild,
+  upsertSearchIndexBySlug
 } from "../lib/searchIndexStore.js";
 import {
   cleanupUnusedUploads,
@@ -59,7 +60,8 @@ import {
 import { validatePasswordStrength } from "../lib/password.js";
 import { getRuntimeSettings, getUiMode, setIndexBackend, setUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
 import { deleteUserSessions } from "../lib/sessionStore.js";
-import { listBrokenInternalLinks, listPages } from "../lib/wikiStore.js";
+import { convertWikitextToMarkdown } from "../lib/wikitextImport.js";
+import { listBrokenInternalLinks, listPages, savePage, slugifyTitle } from "../lib/wikiStore.js";
 
 const asRecord = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object") return {};
@@ -102,6 +104,15 @@ const parseCsvTags = (raw: string): string[] =>
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+
+const readUploadPartAsText = async (part: { file: AsyncIterable<Buffer> }): Promise<string> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of part.file) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+};
 
 const renderUsersTable = (csrfToken: string, ownUserId: string, users: Awaited<ReturnType<typeof listUsers>>): string => {
   if (users.length === 0) {
@@ -1179,6 +1190,7 @@ type AdminNavKey =
   | "users"
   | "ui"
   | "media"
+  | "import"
   | "categories"
   | "templates"
   | "groups"
@@ -1192,6 +1204,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string; mi
   { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
   { key: "ui", href: "/admin/ui", label: "Bedienmodus" },
   { key: "media", href: "/admin/media", label: "Bildverwaltung" },
+  { key: "import", href: "/admin/import/wikitext", label: "Wikitext-Import", minMode: "advanced" },
   { key: "categories", href: "/admin/categories", label: "Kategorien" },
   { key: "templates", href: "/admin/templates", label: "Vorlagen" },
   { key: "groups", href: "/admin/groups", label: "Gruppen", minMode: "advanced" },
@@ -1421,6 +1434,206 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         : `Datei gelöscht: ${normalizedFileName}`;
 
     return reply.redirect(`/admin/media?notice=${encodeURIComponent(notice)}`);
+  });
+
+  app.get("/admin/import/wikitext", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const categories = await listCategories();
+    const defaultCategory = await getDefaultCategory();
+
+    const titleValue = readSingle(query.title);
+    const slugValue = readSingle(query.slug);
+    const tagsValue = readSingle(query.tags);
+    const selectedCategoryId = readSingle(query.categoryId) || defaultCategory.id;
+    const securityProfileValue = readSingle(query.securityProfile).trim().toLowerCase() === "confidential" ? "confidential" : "standard";
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Wikitext-Import",
+        description: "MediaWiki/Wikitext in Markdown konvertieren und als FlatWiki-Artikel speichern.",
+        active: "import"
+      })}
+      <section class="content-wrap stack">
+        <p class="muted-note">
+          Unterstützt unter anderem: Überschriften, Listen, Tabellen, externe Links, interne Wiki-Links, Datei/Bild-Links und
+          <code>&lt;syntaxhighlight&gt;</code>-Blöcke.
+        </p>
+        <form method="post" action="/admin/import/wikitext" enctype="multipart/form-data" class="stack">
+          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+          <label>Titel (optional)
+            <input type="text" name="title" value="${escapeHtml(titleValue)}" maxlength="120" placeholder="Wenn leer, aus der ersten Hauptüberschrift erkannt" />
+          </label>
+          <label>Seitenadresse (optional)
+            <input type="text" name="slug" value="${escapeHtml(slugValue)}" pattern="[a-z0-9-]{1,80}" placeholder="Wird aus dem Titel erzeugt, wenn leer" />
+          </label>
+          <label>Kategorie
+            <select name="categoryId" required>
+              ${categories
+                .map(
+                  (category) =>
+                    `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                      category.name
+                    )}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+          <label>Tags (kommagetrennt)
+            <input type="text" name="tags" value="${escapeHtml(tagsValue)}" placeholder="z. B. migration, wikitext, import" />
+          </label>
+          <label>Sicherheitsprofil
+            <select name="securityProfile">
+              <option value="standard" ${securityProfileValue === "standard" ? "selected" : ""}>Standard</option>
+              <option value="confidential" ${securityProfileValue === "confidential" ? "selected" : ""}>Vertraulich (verschlüsselt)</option>
+            </select>
+          </label>
+          <label>Wikitext einfügen
+            <textarea name="wikitext" rows="14" placeholder="Wikitext hier einfügen ..."></textarea>
+          </label>
+          <label>Oder Wikitext-Datei hochladen
+            <input type="file" name="sourceFile" accept=".txt,.wiki,.wikitext,.mediawiki,text/plain" />
+          </label>
+          <p class="muted-note small">
+            Wenn Datei und Text vorhanden sind, wird die Datei verwendet.
+          </p>
+          <div class="action-row">
+            <button type="submit">Wikitext importieren</button>
+          </div>
+        </form>
+      </section>
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        title: "Wikitext-Import",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
+  app.post("/admin/import/wikitext", { preHandler: [requireAdmin] }, async (request, reply) => {
+    if (!request.isMultipart()) {
+      return reply.redirect("/admin/import/wikitext?error=Bitte+Formular+als+Multipart+senden.");
+    }
+
+    const fields: Record<string, string> = {};
+    let uploadedWikitext = "";
+    let uploadedFileName = "";
+    let parseError = "";
+    let fileCount = 0;
+
+    for await (const part of request.parts({ limits: { files: 1, fields: 24, fileSize: 5 * 1024 * 1024 } })) {
+      if (part.type === "field") {
+        const value = typeof part.value === "string" ? part.value : String(part.value ?? "");
+        fields[part.fieldname] = value;
+        continue;
+      }
+
+      if (part.fieldname !== "sourceFile") {
+        part.file.resume();
+        continue;
+      }
+
+      fileCount += 1;
+      if (fileCount > 1) {
+        part.file.resume();
+        parseError = "Bitte höchstens eine Datei hochladen.";
+        continue;
+      }
+
+      uploadedFileName = (part.filename ?? "").trim();
+      uploadedWikitext = await readUploadPartAsText(part as unknown as { file: AsyncIterable<Buffer> });
+      const streamWithMeta = part.file as unknown as { truncated?: boolean };
+      if (streamWithMeta.truncated) {
+        parseError = "Die Datei ist zu groß (max. 5 MB).";
+      }
+    }
+
+    if (!verifySessionCsrfToken(request, fields._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    if (parseError) {
+      return reply.redirect(`/admin/import/wikitext?error=${encodeURIComponent(parseError)}`);
+    }
+
+    const pastedWikitext = fields.wikitext ?? "";
+    const sourceWikitext = uploadedWikitext.trim().length > 0 ? uploadedWikitext : pastedWikitext;
+    if (sourceWikitext.trim().length < 1) {
+      return reply.redirect("/admin/import/wikitext?error=Bitte+Wikitext+einfügen+oder+eine+Datei+hochladen.");
+    }
+
+    const conversion = convertWikitextToMarkdown(sourceWikitext);
+    if (conversion.markdown.trim().length < 1) {
+      return reply.redirect("/admin/import/wikitext?error=Der+importierte+Text+ergab+keinen+Inhalt.");
+    }
+
+    const requestedTitle = (fields.title ?? "").trim();
+    const detectedTitle = conversion.detectedTitle.trim();
+    const finalTitle = requestedTitle || detectedTitle || `Import ${new Date().toISOString().slice(0, 10)}`;
+    const finalSlug = ((fields.slug ?? "").trim().toLowerCase() || slugifyTitle(finalTitle)).trim().toLowerCase();
+    const selectedCategory = await findCategoryById(fields.categoryId ?? "");
+    const fallbackCategory = await getDefaultCategory();
+    const categoryId = selectedCategory?.id ?? fallbackCategory.id;
+    const securityProfile = (fields.securityProfile ?? "").trim().toLowerCase() === "confidential" ? "confidential" : "standard";
+
+    if (securityProfile === "confidential" && !config.contentEncryptionKey) {
+      return reply.redirect("/admin/import/wikitext?error=Vertraulich+ist+ohne+CONTENT_ENCRYPTION_KEY+nicht+möglich.");
+    }
+
+    const actor = (request.currentUser?.username ?? "admin").trim().toLowerCase() || "admin";
+    const result = await savePage({
+      slug: finalSlug,
+      title: finalTitle,
+      tags: parseCsvTags(fields.tags ?? ""),
+      content: conversion.markdown,
+      updatedBy: actor,
+      categoryId,
+      securityProfile,
+      visibility: securityProfile === "confidential" ? "restricted" : "all",
+      allowedUsers: securityProfile === "confidential" ? [actor] : [],
+      allowedGroups: [],
+      encrypted: securityProfile === "confidential"
+    });
+
+    if (!result.ok) {
+      const params = new URLSearchParams();
+      params.set("error", result.error ?? "Import fehlgeschlagen.");
+      params.set("title", finalTitle);
+      params.set("slug", finalSlug);
+      params.set("tags", fields.tags ?? "");
+      params.set("categoryId", categoryId);
+      params.set("securityProfile", securityProfile);
+      return reply.redirect(`/admin/import/wikitext?${params.toString()}`);
+    }
+
+    await upsertSearchIndexBySlug(finalSlug);
+
+    await writeAuditLog({
+      action: "admin_wikitext_import",
+      actorId: request.currentUser?.id,
+      targetId: finalSlug,
+      details: {
+        source: uploadedFileName || "textarea",
+        sourceLines: conversion.stats.sourceLines,
+        markdownLines: conversion.stats.markdownLines,
+        tables: conversion.stats.convertedTables,
+        codeBlocks: conversion.stats.convertedCodeBlocks,
+        warnings: conversion.warnings.length
+      }
+    });
+
+    const noticeParts = [
+      `Import abgeschlossen: ${conversion.stats.sourceLines} → ${conversion.stats.markdownLines} Zeilen.`,
+      `${conversion.stats.convertedTables} Tabellen, ${conversion.stats.convertedCodeBlocks} Codeblöcke.`,
+      conversion.warnings.length > 0 ? `${conversion.warnings.length} Hinweis(e), bitte Artikel prüfen.` : ""
+    ].filter((entry) => entry.length > 0);
+
+    return reply.redirect(`/wiki/${encodeURIComponent(finalSlug)}?notice=${encodeURIComponent(noticeParts.join(" "))}`);
   });
 
   app.get("/admin/categories", { preHandler: [requireAdmin] }, async (request, reply) => {

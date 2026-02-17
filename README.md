@@ -53,6 +53,9 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 - Schnell-Assistent für neue Seiten (3 Schritte: Inhaltstyp, Kategorie, Schutz)
 - Vorlagen für Alltag/Firma: Idee, Dokumentation, Reisebericht, Finanznotiz
 - Admin-Vorlagenverwaltung unter `/admin/templates` (aktivieren, sortieren, bearbeiten, eigene Vorlagen anlegen)
+- Wikitext-Importer im Admin-Bereich (`/admin/import/wikitext`)
+  - konvertiert MediaWiki/Wikitext nach Markdown
+  - unterstützt u. a. Überschriften, Listen, Tabellen, Datei/Bild-Links und `<syntaxhighlight>`
 - Automatische Artikel-Navigation (links) aus Markdown-Überschriften
 - Admin-Bildverwaltung mit Referenzprüfung (`/admin/media`)
   - zeigt pro Bild, ob es eingebunden ist und in welchen Artikeln
@@ -435,6 +438,15 @@ Hinweise:
 - Beim Erstellen hilft ein 3-Schritte-Assistent inkl. Seitenvorlagen.
 - Inhaltstyp-Vorlagen im Assistenten kommen aus der Admin-Vorlagenverwaltung (`/admin/templates`).
 - Format-Hilfe als Wiki-Seite: `/wiki/markdown-formatierung-howto`
+
+## Wikitext importieren (MediaWiki)
+
+- Admin-Bereich: `/admin/import/wikitext`
+- Du kannst Wikitext direkt einfügen oder als Datei hochladen (`.txt`, `.wiki`, `.wikitext`, `.mediawiki`).
+- FlatWiki konvertiert in Markdown und speichert den Artikel regulär im Flat-File-Format.
+- Wenn kein Titel gesetzt ist, wird die erste Hauptüberschrift (`= Titel =`) als Titel verwendet.
+- Für sensible Altinhalte kannst du beim Import direkt `Vertraulich` wählen (verschlüsselt + eingeschränkter Zugriff).
+- Nach dem Import bitte die Zielseite kurz prüfen, da sehr komplexe Wikitext-Sonderfälle je nach Quelle manuelle Nacharbeit brauchen können.
 
 ## Bildverwaltung und Cleanup
 
