@@ -608,6 +608,12 @@ a.tag-chip:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: 1rem;
+  align-items: start;
+}
+
+.editor-grid > form,
+.editor-grid > aside {
+  min-width: 0;
 }
 
 .new-page-wizard {
@@ -733,6 +739,20 @@ a.tag-chip:hover {
   border-radius: 12px;
   background: white;
   padding: 0.8rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.editor-preview .wiki-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.editor-preview .wiki-content :is(h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote) {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .upload-panel {
@@ -1257,6 +1277,8 @@ th {
 
 .wiki-content {
   margin-top: 1.2rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .wiki-table-wrap {
