@@ -250,6 +250,9 @@ const toSafeHtml = (rawHtml: string): string => {
   });
 };
 
+const wrapTablesForScrolling = (html: string): string =>
+  html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tableHtml) => `<div class="wiki-table-wrap">${tableHtml}</div>`);
+
 const headingAnchorSlug = (text: string): string =>
   text
     .normalize("NFKD")
@@ -305,7 +308,8 @@ const renderMarkdownToHtmlWithAnchors = (content: string): { html: string; table
   };
 
   const rendered = marked.parse(renderedMarkdown, { async: false, renderer });
-  const html = toSafeHtml(typeof rendered === "string" ? rendered : "");
+  const safeHtml = toSafeHtml(typeof rendered === "string" ? rendered : "");
+  const html = wrapTablesForScrolling(safeHtml);
 
   return {
     html,
