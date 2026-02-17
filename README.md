@@ -221,6 +221,7 @@ cd /pfad/zu/FlatWiki
 Das Script erzeugt lokal (nicht für Git):
 
 - `deploy/Caddyfile`
+- `deploy/logs/access.log`
 - `docker-compose.caddy.yml`
 
 Und startet:
@@ -238,6 +239,35 @@ Voraussetzungen:
 
 - DNS (`A`/`AAAA`) zeigt auf den Server
 - Ports `80` und `443` sind offen
+
+### Optional: fail2ban für Caddy (Brute-Force/Scanner)
+
+Für Docker-Caddy enthält FlatWiki ein passendes Setup-Script:
+
+```bash
+cd /pfad/zu/FlatWiki
+sudo ./scripts/setup-fail2ban-caddy.sh
+```
+
+Das Script:
+
+- richtet einen Filter für Caddy-Access-Logs ein
+- legt eine Jail (`flatwiki-caddy`) an
+- überwacht `deploy/logs/access.log`
+
+Status prüfen:
+
+```bash
+sudo fail2ban-client status
+sudo fail2ban-client status flatwiki-caddy
+```
+
+Mehrere Instanzen (Beispiel):
+
+```bash
+sudo ./scripts/setup-fail2ban-caddy.sh --instance-dir /opt/flatwiki-public --jail-name flatwiki-public
+sudo ./scripts/setup-fail2ban-caddy.sh --instance-dir /opt/flatwiki-private --jail-name flatwiki-private
+```
 
 ## Wichtige Hinweise
 
@@ -478,7 +508,8 @@ Hinweise:
 ├─ scripts/
 │  ├─ backup-encrypted.sh
 │  ├─ backup-decrypt.sh
-│  └─ deploy-caddy.sh
+│  ├─ deploy-caddy.sh
+│  └─ setup-fail2ban-caddy.sh
 ├─ data/
 │  └─ wiki/
 ├─ public/

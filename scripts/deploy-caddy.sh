@@ -17,6 +17,7 @@ Optionen:
 
 Erzeugte Dateien (lokal, nicht für Git):
   deploy/Caddyfile
+  deploy/logs/access.log
   docker-compose.caddy.yml
 EOF
 }
@@ -83,6 +84,8 @@ fi
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DEPLOY_DIR="$ROOT_DIR/deploy"
+LOG_DIR="$DEPLOY_DIR/logs"
+LOG_FILE="$LOG_DIR/access.log"
 CADDYFILE_PATH="$DEPLOY_DIR/Caddyfile"
 COMPOSE_OVERRIDE_PATH="$ROOT_DIR/docker-compose.caddy.yml"
 
@@ -96,7 +99,13 @@ if [ ! -f "$ROOT_DIR/config.env" ]; then
   exit 1
 fi
 
-mkdir -p "$DEPLOY_DIR"
+mkdir -p "$DEPLOY_DIR" "$LOG_DIR"
+if [ ! -f "$LOG_FILE" ]; then
+  touch "$LOG_FILE"
+fi
+# Caddy-Container muss in den Logpfad schreiben koennen.
+chmod 0777 "$LOG_DIR" 2>/dev/null || true
+chmod 0666 "$LOG_FILE" 2>/dev/null || true
 
 if [ -f "$CADDYFILE_PATH" ] && [ "$FORCE" -ne 1 ]; then
   echo "Fehler: $CADDYFILE_PATH existiert bereits. Nutze --force zum Überschreiben." >&2
@@ -115,6 +124,14 @@ if [ -n "$EMAIL" ]; then
 }
 
 $DOMAIN {
+  log {
+    output file /var/log/caddy/access.log {
+      roll_size 10mb
+      roll_keep 10
+      roll_keep_for 720h
+    }
+    format json
+  }
   encode zstd gzip
   reverse_proxy flatwiki:3000
 }
@@ -122,6 +139,14 @@ EOF
 else
   cat >"$CADDYFILE_PATH" <<EOF
 $DOMAIN {
+  log {
+    output file /var/log/caddy/access.log {
+      roll_size 10mb
+      roll_keep 10
+      roll_keep_for 720h
+    }
+    format json
+  }
   encode zstd gzip
   reverse_proxy flatwiki:3000
 }
@@ -145,6 +170,7 @@ services:
       - "443:443"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/logs:/var/log/caddy
       - caddy_data:/data
       - caddy_config:/config
 
@@ -154,6 +180,7 @@ volumes:
 EOF
 
 echo "OK: $CADDYFILE_PATH erstellt"
+echo "OK: $LOG_FILE vorbereitet"
 echo "OK: $COMPOSE_OVERRIDE_PATH erstellt"
 echo ""
 echo "Wichtig:"
@@ -186,3 +213,5 @@ echo "Prüfen:"
 echo "  https://$DOMAIN"
 echo "  docker compose -f docker-compose.yml -f docker-compose.caddy.yml logs -f caddy"
 echo "  /admin/ssl im FlatWiki-Adminbereich"
+echo "Optional (Host-Hardening):"
+echo "  sudo ./scripts/setup-fail2ban-caddy.sh --instance-dir \"$ROOT_DIR\""
