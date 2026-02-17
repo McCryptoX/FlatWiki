@@ -1,7 +1,6 @@
 services:
   flatwiki:
     build: .
-    container_name: flatwiki
     restart: unless-stopped
     env_file:
       - ./config.env
