@@ -31,6 +31,7 @@ interface LayoutOptions {
   error?: string | undefined;
   searchQuery?: string | undefined;
   scripts?: string[] | undefined;
+  hideHeaderSearch?: boolean | undefined;
 }
 
 export const renderLayout = (options: LayoutOptions): string => {
@@ -43,6 +44,11 @@ export const renderLayout = (options: LayoutOptions): string => {
       <div class="nav-right">
         <span class="welcome">${escapeHtml(user.displayName)}</span>
         <a href="/toc">Inhaltsverzeichnis</a>
+        <a href="/notifications">Benachrichtigungen${
+          user.unreadNotificationsCount && user.unreadNotificationsCount > 0
+            ? ` <span class="notif-badge">${Math.min(user.unreadNotificationsCount, 99)}</span>`
+            : ""
+        }</a>
         <a href="/account">Konto</a>
         ${
           user.role === "admin"
@@ -57,7 +63,8 @@ export const renderLayout = (options: LayoutOptions): string => {
     `
     : `<a href="/login">Anmelden</a>`;
 
-  const search = user || publicReadEnabled
+  const showHeaderSearch = !options.hideHeaderSearch && (user || publicReadEnabled);
+  const search = showHeaderSearch
     ? `
       <form method="get" action="/search" class="search-form">
         <div class="search-box" data-search-suggest>
@@ -86,12 +93,12 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <title>${title}</title>
-    <link rel="stylesheet" href="/styles.css?v=20" />
+    <link rel="stylesheet" href="/styles.css?v=30" />
   </head>
   <body>
     <div class="bg-shape bg-shape-1"></div>
     <div class="bg-shape bg-shape-2"></div>
-    <header class="site-header">
+    <header class="site-header ${showHeaderSearch ? "" : "site-header-no-search"}">
       <div>
         <a href="/" class="brand">${escapeHtml(siteTitle)}</a>
         <p class="subtitle">Sicheres Flat-File Wiki</p>

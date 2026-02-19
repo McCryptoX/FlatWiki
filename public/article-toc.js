@@ -28,7 +28,7 @@
 
   let activeId = "";
   let frameHandle = 0;
-  const topOffset = 150;
+  const topOffset = 140;
   const scrollMargin = 8;
 
   const canScrollWithinToc = () => {
@@ -70,11 +70,18 @@
   };
 
   const computeActiveId = () => {
-    const threshold = window.scrollY + topOffset;
+    const nearBottom =
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+
+    if (nearBottom) {
+      return entries[entries.length - 1]?.id || "";
+    }
+
     let current = entries[0]?.id || "";
 
     for (const entry of entries) {
-      if (entry.heading.offsetTop <= threshold) {
+      const headingTop = entry.heading.getBoundingClientRect().top;
+      if (headingTop <= topOffset) {
         current = entry.id;
       } else {
         break;

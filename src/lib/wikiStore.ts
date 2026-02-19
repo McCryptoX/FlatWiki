@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEq
 import fs from "node:fs/promises";
 import path from "node:path";
 import matter from "gray-matter";
+import hljs from "highlight.js/lib/core";
+import bashLanguage from "highlight.js/lib/languages/bash";
 import { marked, type Tokens } from "marked";
 import sanitizeHtml from "sanitize-html";
 import { config } from "../config.js";
@@ -18,11 +20,14 @@ marked.use({
   breaks: true
 });
 
+hljs.registerLanguage("bash", bashLanguage);
+
 const SLUG_PATTERN = /^[a-z0-9-]{1,80}$/;
 const SUGGESTION_INDEX_MAX_AGE_MS = 20_000;
 const INTERNAL_LINK_GRAPH_MAX_AGE_MS = 30_000;
 const INTERNAL_LINK_PATTERN = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 const CONTENT_INTEGRITY_VERSION = 2;
+const BASH_LANGUAGE_ALIASES = new Set(["bash", "sh", "shell", "zsh", "console"]);
 
 interface EncryptedPayload {
   encIv: string;
@@ -263,6 +268,16 @@ const headingAnchorSlug = (text: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "section";
 
+const normalizeCodeLanguage = (rawLanguage: string | undefined): string | null => {
+  const normalized = String(rawLanguage ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) return null;
+  if (BASH_LANGUAGE_ALIASES.has(normalized)) return "bash";
+  return null;
+};
+
 const collectHeadings = (content: string): WikiHeading[] => {
   const tokens = marked.lexer(content, { gfm: true, breaks: true });
   const headings = tokens.filter((token): token is Tokens.Heading => token.type === "heading" && token.depth >= 2);
@@ -286,6 +301,7 @@ const collectHeadings = (content: string): WikiHeading[] => {
 const renderMarkdownToHtmlWithAnchors = (content: string): { html: string; tableOfContents: WikiHeading[] } => {
   const renderedMarkdown = renderInternalWikiLinksToMarkdownLinks(content);
   const tableOfContents = collectHeadings(renderedMarkdown);
+  const baseRenderer = new marked.Renderer();
   const renderer = new marked.Renderer();
   let headingIndex = 0;
 
@@ -305,6 +321,25 @@ const renderMarkdownToHtmlWithAnchors = (content: string): { html: string; table
     }
 
     return `<h${normalizedDepth} id="${tocEntry.id}">${inner}</h${normalizedDepth}>`;
+  };
+
+  renderer.code = function codeWithHighlight(token: Tokens.Code): string {
+    const { text, lang } = token;
+    const normalizedLanguage = normalizeCodeLanguage(lang);
+    if (!normalizedLanguage) {
+      return baseRenderer.code(token);
+    }
+
+    try {
+      const highlighted = hljs.highlight(text, {
+        language: normalizedLanguage,
+        ignoreIllegals: true
+      }).value;
+
+      return `<pre><code class="hljs language-${normalizedLanguage}">${highlighted}</code></pre>\n`;
+    } catch {
+      return baseRenderer.code(token);
+    }
   };
 
   const rendered = marked.parse(renderedMarkdown, { async: false, renderer });

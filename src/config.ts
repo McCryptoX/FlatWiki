@@ -13,6 +13,7 @@ interface InstallerResult {
 }
 
 export type IndexBackend = "flat" | "sqlite";
+export type AttachmentScanMode = "auto" | "required" | "off";
 
 const appendMissingEnvKeys = (filePath: string): InstallerResult => {
   const result: InstallerResult = { created: false };
@@ -41,6 +42,8 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     VERSION_HISTORY_COMPRESS_AFTER: "30",
     WIKI_TITLE: "FlatWiki",
     INDEX_BACKEND: "flat",
+    ATTACHMENT_SCAN_MODE: "auto",
+    ATTACHMENT_SCANNER_CMD: "clamscan",
     BOOTSTRAP_ADMIN_USERNAME: "admin"
   };
 
@@ -75,7 +78,9 @@ const hasExternalConfig = [
   "VERSION_HISTORY_RETENTION",
   "VERSION_HISTORY_COMPRESS_AFTER",
   "WIKI_TITLE",
-  "INDEX_BACKEND"
+  "INDEX_BACKEND",
+  "ATTACHMENT_SCAN_MODE",
+  "ATTACHMENT_SCANNER_CMD"
 ].some((key) => Boolean(process.env[key]));
 
 const installerResult = fs.existsSync(configEnvPath) || !hasExternalConfig
@@ -109,6 +114,13 @@ const parseBoolean = (value: string | undefined, fallback: boolean): boolean => 
 const parseIndexBackend = (value: string | undefined): IndexBackend => {
   const normalized = (value ?? "").trim().toLowerCase();
   return normalized === "sqlite" ? "sqlite" : "flat";
+};
+
+const parseAttachmentScanMode = (value: string | undefined): AttachmentScanMode => {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "required") return "required";
+  if (normalized === "off") return "off";
+  return "auto";
 };
 
 const parseHexKey = (value: string | undefined, name: string): Buffer | null => {
@@ -147,6 +159,8 @@ export const config = {
   versionHistoryCompressAfter: parseNonNegativeInt(process.env.VERSION_HISTORY_COMPRESS_AFTER, 30),
   wikiTitle: process.env.WIKI_TITLE ?? "FlatWiki",
   indexBackend: parseIndexBackend(process.env.INDEX_BACKEND),
+  attachmentScanMode: parseAttachmentScanMode(process.env.ATTACHMENT_SCAN_MODE),
+  attachmentScannerCommand: (process.env.ATTACHMENT_SCANNER_CMD ?? "clamscan").trim() || "clamscan",
   bootstrapAdminUsername: process.env.BOOTSTRAP_ADMIN_USERNAME ?? "admin",
   contentEncryptionKey: runtimeEncryptionKey,
   contentIntegrityKey: runtimeIntegrityKey,
@@ -164,6 +178,16 @@ export const config = {
   groupsFile: path.join(rootDir, "data", "groups.json"),
   usersFile: path.join(rootDir, "data", "users.json"),
   sessionsFile: path.join(rootDir, "data", "sessions.json"),
+  pageViewsFile: path.join(rootDir, "data", "page-views.json"),
+  pageViewsSqliteFile: path.join(rootDir, "data", "page-views.sqlite"),
+  commentsFile: path.join(rootDir, "data", "comments.json"),
+  watchFile: path.join(rootDir, "data", "watch.json"),
+  notificationsFile: path.join(rootDir, "data", "notifications.json"),
+  workflowFile: path.join(rootDir, "data", "workflow.json"),
+  attachmentsRootDir: path.join(rootDir, "data", "attachments"),
+  attachmentsFileDir: path.join(rootDir, "data", "attachments", "files"),
+  attachmentsQuarantineDir: path.join(rootDir, "data", "attachments", "quarantine"),
+  attachmentsFile: path.join(rootDir, "data", "attachments", "attachments.json"),
   auditFile: path.join(rootDir, "data", "audit.log")
 };
 

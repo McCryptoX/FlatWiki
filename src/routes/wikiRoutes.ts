@@ -1,22 +1,37 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { requireAdmin, requireAuth, requireAuthOrPublicRead, verifySessionCsrfToken } from "../lib/auth.js";
+import {
+  buildAttachmentDownloadName,
+  createAttachmentQuarantinePath,
+  deleteAttachmentById,
+  deleteAttachmentsForPage,
+  finalizeAttachmentFromQuarantine,
+  getAttachmentById,
+  getAttachmentFilePath,
+  listAttachmentsBySlug
+} from "../lib/attachmentStore.js";
 import { writeAuditLog } from "../lib/audit.js";
 import { findCategoryById, getDefaultCategory, listCategories } from "../lib/categoryStore.js";
-import { listGroups } from "../lib/groupStore.js";
+import { createPageComment, deleteCommentsForPage, deletePageComment, listPageComments } from "../lib/commentStore.js";
+import { listGroupIdsForUser, listGroups } from "../lib/groupStore.js";
+import { createNotification, deleteNotificationsForPage } from "../lib/notificationStore.js";
 import { listTemplates } from "../lib/templateStore.js";
 import { config } from "../config.js";
-import { ensureDir } from "../lib/fileStore.js";
+import { ensureDir, removeFile } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
+import { listTrendingTopics, recordPageView } from "../lib/pageViewStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
 import { getUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
 import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
 import { buildUnifiedDiff } from "../lib/textDiff.js";
-import { listUsers } from "../lib/userStore.js";
-import type { SecurityProfile, WikiPageSummary } from "../types.js";
+import { findUserByUsername, listUsers } from "../lib/userStore.js";
+import { deleteWatchesForPage, isUserWatchingPage, listWatchersForPage, unwatchPage, watchPage } from "../lib/watchStore.js";
+import type { PublicUser, SecurityProfile, WikiPageSummary } from "../types.js";
+import { getPageWorkflow, removeWorkflowForPage, setPageWorkflow, type WorkflowStatus } from "../lib/workflowStore.js";
 import {
   canUserAccessPage,
   deletePage,
@@ -214,25 +229,6 @@ const renderCategoryFilter = (
   </form>
 `;
 
-const renderDashboardCategoryFilter = (
-  categories: Array<{ id: string; name: string }>,
-  selectedCategoryId: string
-): string => `
-  <form method="get" action="/" class="dashboard-filter-row">
-    <label class="sr-only" for="dashboard-category-filter">Kategorie</label>
-    <select id="dashboard-category-filter" name="category" class="tiny" onchange="this.form.submit()">
-      <option value="">Alle Kategorien</option>
-      ${categories
-        .map(
-          (category) =>
-            `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`
-        )
-        .join("")}
-    </select>
-    ${selectedCategoryId ? '<a class="dashboard-reset-link" href="/">Zurücksetzen</a>' : ""}
-  </form>
-`;
-
 const parsePageNumber = (raw: string): number => {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return 1;
@@ -365,6 +361,35 @@ const formatSecurityProfileLabel = (value: SecurityProfile): string => {
   return "Standard";
 };
 
+const normalizeWorkflowStatusInput = (value: string): WorkflowStatus => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "approved") return "approved";
+  if (normalized === "in_review") return "in_review";
+  return "draft";
+};
+
+const formatWorkflowStatusLabel = (status: WorkflowStatus): string => {
+  if (status === "approved") return "Freigegeben";
+  if (status === "in_review") return "In Review";
+  return "Entwurf";
+};
+
+const formatMultilinePlainText = (value: string): string => escapeHtml(value).replace(/\n/g, "<br />");
+
+const formatAttachmentFileSize = (sizeBytes: number): string => {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+const buildAccessUser = async (user: PublicUser): Promise<PublicUser> => {
+  const groupIds = user.role === "admin" ? [] : await listGroupIdsForUser(user.username);
+  return {
+    ...user,
+    groupIds
+  };
+};
+
 const applySecurityProfileToSettings = (
   securityProfile: SecurityProfile,
   input: { visibility: "all" | "restricted"; encrypted: boolean; sensitive: boolean }
@@ -456,22 +481,51 @@ const renderSearchResultList = (
 
 const renderRecentPages = (pages: WikiPageSummary[]): string => {
   if (pages.length < 1) {
-    return '<p class="empty">Noch keine Artikel vorhanden.</p>';
+    return '<p class="empty">Keine Änderungen in den letzten 7 Tagen.</p>';
   }
 
   return `
-    <div class="dashboard-recent-list">
+    <ul class="dashboard-recent-list">
       ${pages
+        .map((page) => {
+          const updatedBy = page.updatedBy && page.updatedBy !== "unknown" ? `von ${page.updatedBy}` : "";
+          const metaBits = [page.categoryName, formatDate(page.updatedAt), updatedBy].filter((entry) => entry.length > 0);
+          return `
+            <li>
+              <a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a>
+              <span>${escapeHtml(metaBits.join(" • "))}</span>
+            </li>
+          `;
+        })
+        .join("")}
+    </ul>
+  `;
+};
+
+const renderTrendingTopics = (
+  topics: Array<{ slug: string; title: string; categoryName: string; views: number; lastViewedAt: string }>
+): string => {
+  if (topics.length < 1) {
+    return '<p class="empty">Noch keine Trends in den letzten 30 Tagen.</p>';
+  }
+
+  return `
+    <ol class="dashboard-trending-list">
+      ${topics
         .map(
-          (page) => `
-            <a class="dashboard-recent-item" href="/wiki/${encodeURIComponent(page.slug)}">
-              <strong>${escapeHtml(page.title)}</strong>
-              <span>${escapeHtml(page.categoryName)} • ${escapeHtml(formatDate(page.updatedAt))}</span>
-            </a>
+          (topic, index) => `
+            <li>
+              <span class="dashboard-trending-rank">${index + 1}</span>
+              <a href="/wiki/${encodeURIComponent(topic.slug)}">${escapeHtml(topic.title)}</a>
+              <span class="dashboard-trending-count">${topic.views} Aufrufe</span>
+              <span class="dashboard-trending-meta">${escapeHtml(topic.categoryName)} • zuletzt ${escapeHtml(
+                formatDate(topic.lastViewedAt)
+              )}</span>
+            </li>
           `
         )
         .join("")}
-    </div>
+    </ol>
   `;
 };
 
@@ -822,82 +876,216 @@ const buildEditorRedirectQuery = (params: {
   return query.toString();
 };
 
+const notifyWatchersForPageEvent = async (input: {
+  slug: string;
+  title: string;
+  page: Awaited<ReturnType<typeof getPage>>;
+  actorId?: string;
+  actorUsername?: string;
+  event: "page_update" | "comment" | "workflow";
+  eventTitle: string;
+  eventBody: string;
+  url: string;
+}): Promise<number> => {
+  if (!input.page) return 0;
+
+  const watcherUserIds = await listWatchersForPage(input.slug);
+  if (watcherUserIds.length < 1) return 0;
+
+  const users = (await listUsers()).filter((entry) => !entry.disabled);
+  const userById = new Map(users.map((entry) => [entry.id, entry] as const));
+  let created = 0;
+
+  for (const userId of watcherUserIds) {
+    if (userId === input.actorId) continue;
+    const watcher = userById.get(userId);
+    if (!watcher) continue;
+    const accessUser = await buildAccessUser(watcher);
+    if (!canUserAccessPage(input.page, accessUser)) continue;
+
+    const result = await createNotification({
+      userId: watcher.id,
+      type: input.event,
+      title: input.eventTitle,
+      body: input.eventBody,
+      url: input.url,
+      sourceSlug: input.slug,
+      actorId: input.actorId ?? "",
+      dedupeKey: `${input.event}:${input.slug}:${watcher.id}:${Date.now()}`
+    });
+
+    if (result.ok && result.created) {
+      created += 1;
+    }
+  }
+
+  return created;
+};
+
+const notifyMentionedUsersForComment = async (input: {
+  page: Awaited<ReturnType<typeof getPage>>;
+  commentId: string;
+  mentionUsernames: string[];
+  actorId: string;
+  actorDisplayName: string;
+}): Promise<number> => {
+  if (!input.page || input.mentionUsernames.length < 1) return 0;
+
+  let created = 0;
+  for (const username of input.mentionUsernames) {
+    const user = await findUserByUsername(username);
+    if (!user || user.disabled) continue;
+    if (user.id === input.actorId) continue;
+
+    const accessUser = await buildAccessUser(user);
+    if (!canUserAccessPage(input.page, accessUser)) continue;
+
+    const result = await createNotification({
+      userId: user.id,
+      type: "mention",
+      title: `${input.actorDisplayName} hat dich erwähnt`,
+      body: `in ${input.page.title}`,
+      url: `/wiki/${encodeURIComponent(input.page.slug)}#comment-${encodeURIComponent(input.commentId)}`,
+      sourceSlug: input.page.slug,
+      actorId: input.actorId,
+      dedupeKey: `mention:${input.page.slug}:${input.commentId}:${user.id}`
+    });
+
+    if (result.ok && result.created) {
+      created += 1;
+    }
+  }
+
+  return created;
+};
+
 export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get("/", { preHandler: [requireAuthOrPublicRead] }, async (request, reply) => {
     const query = asObject(request.query);
+    const searchQuery = readSingle(query.q);
     const selectedCategoryId = readSingle(query.category);
-    const categoryFilter = selectedCategoryId ? { categoryId: selectedCategoryId } : undefined;
-    const pages = await listPagesForUser(request.currentUser, categoryFilter);
-    const templates = await listTemplates({ includeDisabled: false });
+    const activeTag = normalizeTagFilter(readSingle(query.tag));
+    const selectedTimeframe = readSingle(query.timeframe).trim().toLowerCase();
+    const selectedScope = readSingle(query.scope).trim().toLowerCase() || "all";
+    const pages = await listPagesForUser(request.currentUser);
     const categories = await listCategories();
-    const quickTemplateIds = ["idea", "documentation", "travel", "finance"];
-    const templateMap = new Map(templates.map((template) => [template.id, template]));
-    const quickTemplates = quickTemplateIds
-      .map((id) => templateMap.get(id))
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-    const recentPages = sortPagesByUpdatedAtDesc([...pages]).slice(0, 4);
-    const showRecentOpen = selectedCategoryId.length > 0;
+    const nowMs = Date.now();
+    const recentCutoffMs = nowMs - 7 * 24 * 60 * 60 * 1000;
+    const recentPages = sortPagesByUpdatedAtDesc([...pages])
+      .filter((page) => {
+        const updatedAtMs = Date.parse(page.updatedAt);
+        return Number.isFinite(updatedAtMs) && updatedAtMs >= recentCutoffMs;
+      })
+      .slice(0, 6);
+    const trendingRaw = await listTrendingTopics({ days: 30, limit: 6 });
+    const pageBySlug = new Map(pages.map((page) => [page.slug, page] as const));
+    const trendingTopics = trendingRaw
+      .map((entry) => {
+        const page = pageBySlug.get(entry.slug);
+        if (!page) return null;
+        return {
+          slug: page.slug,
+          title: page.title,
+          categoryName: page.categoryName,
+          views: entry.views,
+          lastViewedAt: entry.lastViewedAt
+        };
+      })
+      .filter(
+        (entry): entry is { slug: string; title: string; categoryName: string; views: number; lastViewedAt: string } => entry !== null
+      );
 
     const canWrite = Boolean(request.currentUser);
     const body = `
       <section class="dashboard-shell stack large">
-        <section class="page-header">
-          <div>
-            <h1>Startseite</h1>
-            <p>Schnell starten und aktuelle Inhalte direkt sehen.</p>
-            ${renderDashboardCategoryFilter(categories, selectedCategoryId)}
-          </div>
-          <div class="action-row dashboard-primary-actions">
-            <a class="button dashboard-toc-button" href="/toc">Inhaltsverzeichnis</a>
-            ${canWrite ? '<a class="button secondary" href="/new">Neue Seite</a>' : '<a class="button secondary" href="/login">Anmelden zum Schreiben</a>'}
+        <section class="dashboard-hero">
+          <h1>Finde Wissen in Sekunden</h1>
+          <p>Durchsuche Inhalte direkt. Über das Plus kannst du die Filter aufklappen.</p>
+          <form method="get" action="/search" class="dashboard-search-stack" data-home-search>
+            <div class="dashboard-search-form dashboard-search-form-google">
+              <button
+                type="button"
+                class="dashboard-search-plus"
+                data-home-search-toggle
+                aria-controls="home-search-advanced"
+                aria-expanded="false"
+                aria-label="Erweiterte Suche aufklappen"
+              >+</button>
+              <div class="search-box dashboard-search-box" data-search-suggest>
+                <label class="sr-only" for="dashboard-main-search">Wiki durchsuchen</label>
+                <input
+                  id="dashboard-main-search"
+                  type="search"
+                  name="q"
+                  value="${escapeHtml(searchQuery)}"
+                  placeholder="Suche in Artikeln, Tags, Kategorien ..."
+                  autocomplete="off"
+                />
+                <div class="search-suggest" hidden></div>
+              </div>
+              <button type="submit" class="dashboard-search-go">Suche</button>
+            </div>
+            <div class="dashboard-search-preview" data-home-search-preview aria-live="polite">
+              <span class="muted-note small">Keine zusätzlichen Filter aktiv.</span>
+            </div>
+            <section id="home-search-advanced" class="dashboard-search-advanced" data-home-search-panel hidden>
+              <div class="dashboard-search-advanced-grid">
+                <label class="dashboard-advanced-field">Kategorie
+                  <select name="category">
+                    <option value="">Alle Kategorien</option>
+                    ${categories
+                      .map(
+                        (category) =>
+                          `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                            category.name
+                          )}</option>`
+                      )
+                      .join("")}
+                  </select>
+                </label>
+                <label class="dashboard-advanced-field">Tag
+                  <input type="text" name="tag" value="${escapeHtml(activeTag)}" placeholder="z. B. howto" />
+                </label>
+                <label class="dashboard-advanced-field">Zeitraum
+                  <select name="timeframe">
+                    <option value="">Beliebig</option>
+                    <option value="24h" ${selectedTimeframe === "24h" ? "selected" : ""}>Letzte 24 Stunden</option>
+                    <option value="7d" ${selectedTimeframe === "7d" ? "selected" : ""}>Letzte 7 Tage</option>
+                    <option value="30d" ${selectedTimeframe === "30d" ? "selected" : ""}>Letzte 30 Tage</option>
+                    <option value="365d" ${selectedTimeframe === "365d" ? "selected" : ""}>Letzte 12 Monate</option>
+                  </select>
+                </label>
+                <label class="dashboard-advanced-field">Bereich
+                  <select name="scope">
+                    <option value="all" ${selectedScope === "all" ? "selected" : ""}>Alle</option>
+                    <option value="public" ${selectedScope === "public" ? "selected" : ""}>Öffentlich</option>
+                    <option value="restricted" ${selectedScope === "restricted" ? "selected" : ""}>Eingeschränkt</option>
+                    <option value="encrypted" ${selectedScope === "encrypted" ? "selected" : ""}>Verschlüsselt</option>
+                    <option value="unencrypted" ${selectedScope === "unencrypted" ? "selected" : ""}>Unverschlüsselt</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+          </form>
+          <div class="dashboard-hero-links">
+            <a href="/search">Erweiterte Suche</a>
+            <a href="/toc">Inhaltsverzeichnis</a>
+            ${canWrite ? '<a href="/new">Neue Seite</a>' : '<a href="/login">Anmelden</a>'}
           </div>
         </section>
 
-        ${
-          canWrite
-            ? `
-              <section class="content-wrap stack">
-                <h2>Schnellstart</h2>
-                <div class="dashboard-quick-grid">
-                  ${
-                    quickTemplates.length > 0
-                      ? quickTemplates
-                          .map(
-                            (template) => `
-                              <a class="dashboard-tile" href="/new?template=${encodeURIComponent(template.id)}">
-                                <strong>${escapeHtml(template.name)}</strong>
-                                <span>${escapeHtml(template.description || "Direkt mit Vorlage starten.")}</span>
-                              </a>
-                            `
-                          )
-                          .join("")
-                      : `
-                        <a class="dashboard-tile" href="/new?template=idea"><strong>Idee</strong><span>Neue Ideen festhalten.</span></a>
-                        <a class="dashboard-tile" href="/new?template=documentation"><strong>Dokumentation</strong><span>Anleitungen und Wissen strukturieren.</span></a>
-                        <a class="dashboard-tile" href="/new?template=travel"><strong>Reisebericht</strong><span>Erlebnisse und Bilder sammeln.</span></a>
-                        <a class="dashboard-tile" href="/new?template=finance"><strong>Finanznotiz</strong><span>Kritische Inhalte geschützt erfassen.</span></a>
-                      `
-                  }
-                  <a class="dashboard-tile dashboard-tile-ghost" href="/new?template=blank">
-                    <strong>Leer starten</strong>
-                    <span>Freie Seite ohne Vorlage.</span>
-                  </a>
-                </div>
-                <div class="action-row dashboard-link-actions">
-                  <a class="button secondary" href="/toc">Vollständige Übersicht öffnen</a>
-                </div>
-              </section>
-            `
-            : ""
-        }
-
-        <section class="content-wrap stack">
-          <details class="dashboard-activity-panel" ${showRecentOpen ? "open" : ""}>
-            <summary>Letzte Änderungen (${recentPages.length})</summary>
-            <div class="stack">
+        <section class="dashboard-panels-grid">
+          <section class="content-wrap dashboard-recent-panel">
+            <details class="dashboard-recent-disclosure" open>
+              <summary>Letzte Änderungen (7 Tage)</summary>
               ${renderRecentPages(recentPages)}
-            </div>
-          </details>
+            </details>
+          </section>
+          <section class="content-wrap dashboard-trending-panel">
+            <h2>Trending-Themen</h2>
+            <p class="muted-note small">Meistgelesen in den letzten 30 Tagen.</p>
+            ${renderTrendingTopics(trendingTopics)}
+          </section>
         </section>
       </section>
     `;
@@ -909,7 +1097,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         notice: readSingle(query.notice),
-        error: readSingle(query.error)
+        error: readSingle(query.error),
+        hideHeaderSearch: true,
+        scripts: ["/home-search.js?v=4"]
       })
     );
   });
@@ -1014,27 +1204,40 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         );
     }
 
+    try {
+      await recordPageView({
+        slug: page.slug,
+        ...(request.currentUser?.id ? { userId: request.currentUser.id } : {}),
+        ...(request.currentSessionId ? { sessionId: request.currentSessionId } : {})
+      });
+    } catch (error) {
+      request.log.warn({ error, slug: page.slug }, "Konnte Seitenaufruf nicht fuer Trending erfassen");
+    }
+
     const articleToc = renderArticleToc(page.slug, page.tableOfContents);
     const backlinks = await listPageBacklinks(page.slug, request.currentUser);
+    const integrityLabel =
+      page.integrityState === "valid"
+        ? "geprüft"
+        : page.integrityState === "legacy"
+          ? "legacy"
+          : page.integrityState === "unverifiable"
+            ? "nicht prüfbar"
+            : "fehlerhaft";
+    const visibilityLabel = page.visibility === "restricted" ? "eingeschränkt" : "alle";
     const body = `
-      <article class="wiki-page ${articleToc ? "article-layout" : ""}">
+      <article class="wiki-page article-page ${articleToc ? "article-layout" : ""}">
         ${articleToc}
         <div class="article-main">
-          <header>
+          <header class="article-header">
             <h1>${escapeHtml(page.title)}</h1>
-            <p class="meta">Kategorie: ${escapeHtml(page.categoryName)} | Profil: ${escapeHtml(
-              formatSecurityProfileLabel(page.securityProfile)
-            )} | Zugriff: ${
-              page.visibility === "restricted" ? "eingeschränkt" : "alle"
-            } | ${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"} | Integrität: ${
-              page.integrityState === "valid"
-                ? "geprüft"
-                : page.integrityState === "legacy"
-                  ? "legacy"
-                  : page.integrityState === "unverifiable"
-                    ? "nicht prüfbar"
-                    : "fehlerhaft"
-            }</p>
+            <div class="card-meta article-meta-row">
+              <span class="meta-pill">Kategorie: ${escapeHtml(page.categoryName)}</span>
+              <span class="meta-pill">Profil: ${escapeHtml(formatSecurityProfileLabel(page.securityProfile))}</span>
+              <span class="meta-pill">Zugriff: ${escapeHtml(visibilityLabel)}</span>
+              <span class="meta-pill">${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"}</span>
+              <span class="meta-pill">Integrität: ${escapeHtml(integrityLabel)}</span>
+            </div>
             ${
               page.sensitive
                 ? '<p class="muted-note">Sensibler Modus aktiv. Keine PIN/TAN, vollständige Kartendaten oder Geheimnisse im Klartext speichern.</p>'
@@ -1084,7 +1287,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(asObject(request.query).error),
-        scripts: articleToc ? ["/article-toc.js?v=1"] : undefined
+        scripts: articleToc ? ["/article-toc.js?v=2"] : undefined
       })
     );
   });
@@ -2295,57 +2498,79 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .join("");
 
     const body = `
-      <section class="content-wrap">
+      <section class="content-wrap search-page-shell">
         <h1>Suche</h1>
-        <form method="get" action="/search" class="stack search-filter-form">
-          <div class="action-row">
-            <label class="sr-only" for="search-main-q">Suchbegriff</label>
-            <input id="search-main-q" type="search" name="q" value="${escapeHtml(q)}" placeholder="Suchbegriff" />
-            <button type="submit">Suchen</button>
+        <form method="get" action="/search" class="dashboard-search-stack search-page-form" data-home-search>
+          <div class="dashboard-search-form dashboard-search-form-google">
+            <button
+              type="button"
+              class="dashboard-search-plus"
+              data-home-search-toggle
+              aria-controls="search-page-advanced"
+              aria-expanded="false"
+              aria-label="Erweiterte Filter aufklappen"
+            >+</button>
+            <div class="search-box dashboard-search-box" data-search-suggest>
+              <label class="sr-only" for="search-main-q">Suchbegriff</label>
+              <input
+                id="search-main-q"
+                type="search"
+                name="q"
+                value="${escapeHtml(q)}"
+                placeholder="Suche in Artikeln, Tags, Autoren ..."
+                autocomplete="off"
+              />
+              <div class="search-suggest" hidden></div>
+            </div>
+            <button type="submit" class="dashboard-search-go">Suchen</button>
           </div>
-          <div class="search-filter-grid">
-            <label>Kategorie
-              <select name="category">
-                <option value="">Alle Kategorien</option>
-                ${categories
-                  .map(
-                    (category) =>
-                      `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(
-                        category.name
-                      )}</option>`
-                  )
-                  .join("")}
-              </select>
-            </label>
-            <label>Tag
-              <input type="text" name="tag" value="${escapeHtml(activeTag)}" placeholder="z. B. howto" />
-            </label>
-            <label>Autor
-              <input type="text" name="author" value="${escapeHtml(selectedAuthor)}" placeholder="Benutzername" />
-            </label>
-            <label>Zeitraum
-              <select name="timeframe">
-                <option value="">Beliebig</option>
-                <option value="24h" ${selectedTimeframe === "24h" ? "selected" : ""}>Letzte 24 Stunden</option>
-                <option value="7d" ${selectedTimeframe === "7d" ? "selected" : ""}>Letzte 7 Tage</option>
-                <option value="30d" ${selectedTimeframe === "30d" ? "selected" : ""}>Letzte 30 Tage</option>
-                <option value="365d" ${selectedTimeframe === "365d" ? "selected" : ""}>Letzte 12 Monate</option>
-              </select>
-            </label>
-            <label>Bereich
-              <select name="scope">
-                <option value="all" ${selectedScope === "all" ? "selected" : ""}>Alle</option>
-                <option value="public" ${selectedScope === "public" ? "selected" : ""}>Öffentlich</option>
-                <option value="restricted" ${selectedScope === "restricted" ? "selected" : ""}>Eingeschränkt</option>
-                <option value="encrypted" ${selectedScope === "encrypted" ? "selected" : ""}>Verschlüsselt</option>
-                <option value="unencrypted" ${selectedScope === "unencrypted" ? "selected" : ""}>Unverschlüsselt</option>
-              </select>
-            </label>
+          <div class="dashboard-search-preview" data-home-search-preview aria-live="polite">
+            <span class="muted-note small">Keine zusätzlichen Filter aktiv.</span>
           </div>
-          <div class="action-row">
-            <button type="submit" class="secondary">Filter anwenden</button>
-            <a class="button tiny ghost" href="/search">Zurücksetzen</a>
-          </div>
+          <section id="search-page-advanced" class="dashboard-search-advanced" data-home-search-panel hidden>
+            <div class="dashboard-search-advanced-grid">
+              <label class="dashboard-advanced-field">Kategorie
+                <select name="category">
+                  <option value="">Alle Kategorien</option>
+                  ${categories
+                    .map(
+                      (category) =>
+                        `<option value="${escapeHtml(category.id)}" ${category.id === selectedCategoryId ? "selected" : ""}>${escapeHtml(
+                          category.name
+                        )}</option>`
+                    )
+                    .join("")}
+                </select>
+              </label>
+              <label class="dashboard-advanced-field">Tag
+                <input type="text" name="tag" value="${escapeHtml(activeTag)}" placeholder="z. B. howto" />
+              </label>
+              <label class="dashboard-advanced-field">Autor
+                <input type="text" name="author" value="${escapeHtml(selectedAuthor)}" placeholder="Benutzername" />
+              </label>
+              <label class="dashboard-advanced-field">Zeitraum
+                <select name="timeframe">
+                  <option value="">Beliebig</option>
+                  <option value="24h" ${selectedTimeframe === "24h" ? "selected" : ""}>Letzte 24 Stunden</option>
+                  <option value="7d" ${selectedTimeframe === "7d" ? "selected" : ""}>Letzte 7 Tage</option>
+                  <option value="30d" ${selectedTimeframe === "30d" ? "selected" : ""}>Letzte 30 Tage</option>
+                  <option value="365d" ${selectedTimeframe === "365d" ? "selected" : ""}>Letzte 12 Monate</option>
+                </select>
+              </label>
+              <label class="dashboard-advanced-field">Bereich
+                <select name="scope">
+                  <option value="all" ${selectedScope === "all" ? "selected" : ""}>Alle</option>
+                  <option value="public" ${selectedScope === "public" ? "selected" : ""}>Öffentlich</option>
+                  <option value="restricted" ${selectedScope === "restricted" ? "selected" : ""}>Eingeschränkt</option>
+                  <option value="encrypted" ${selectedScope === "encrypted" ? "selected" : ""}>Verschlüsselt</option>
+                  <option value="unencrypted" ${selectedScope === "unencrypted" ? "selected" : ""}>Unverschlüsselt</option>
+                </select>
+              </label>
+            </div>
+            <div class="action-row search-page-reset-row">
+              <a class="button tiny ghost" href="/search">Zurücksetzen</a>
+            </div>
+          </section>
         </form>
         ${activeFilterBadges ? `<div class="search-active-filters">${activeFilterBadges}</div>` : ""}
         <p>${headline}</p>
@@ -2374,7 +2599,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        searchQuery: q
+        searchQuery: q,
+        scripts: ["/home-search.js?v=4"]
       })
     );
   });

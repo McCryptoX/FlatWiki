@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { listGroupIdsForUser } from "./groupStore.js";
+import { countUnreadNotifications } from "./notificationStore.js";
 import { getPublicReadEnabled } from "./runtimeSettingsStore.js";
 import { deleteSession, getSessionById } from "./sessionStore.js";
 import { findUserById, hasAnyUser } from "./userStore.js";
@@ -81,9 +82,11 @@ export const attachCurrentUser = async (request: FastifyRequest, reply: FastifyR
   }
 
   const groupIds = user.role === "admin" ? [] : await listGroupIdsForUser(user.username);
+  const unreadNotificationsCount = await countUnreadNotifications(user.id).catch(() => 0);
   request.currentUser = {
     ...user,
-    groupIds
+    groupIds,
+    unreadNotificationsCount
   };
   request.currentSessionId = sessionId;
   request.csrfToken = session.csrfToken;

@@ -14,6 +14,7 @@ export interface UserRecord {
 
 export interface PublicUser extends Omit<UserRecord, "passwordHash"> {
   groupIds?: string[] | undefined;
+  unreadNotificationsCount?: number | undefined;
 }
 
 export interface UserGroup {
