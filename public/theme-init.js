@@ -6,11 +6,11 @@
     localStorage.setItem("fw-theme", serverTheme);
     return;
   }
-  // Guest / system preference: fall back to localStorage then prefers-color-scheme
+  // Default to dark, then allow explicit persisted preference to override.
   var t = localStorage.getItem("fw-theme");
   if (t === "dark" || t === "light") {
     document.documentElement.setAttribute("data-theme", t);
-  } else if (matchMedia("(prefers-color-scheme:dark)").matches) {
+  } else {
     document.documentElement.setAttribute("data-theme", "dark");
   }
 })()

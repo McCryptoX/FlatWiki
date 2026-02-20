@@ -84,7 +84,11 @@ export const renderLayout = (options: LayoutOptions): string => {
     options.error ? `<div class="flash error">${escapeHtml(options.error)}</div>` : ""
   ].join("\n");
 
-  const scripts = [...(user || publicReadEnabled ? ["/search-suggest.js?v=2", "/cmd-palette.js?v=1"] : []), ...(options.scripts ?? [])]
+  const optionScripts = options.scripts ?? [];
+  const hasArticlePage = options.body.includes('class="wiki-page article-page');
+  const hasArticleTocScript = optionScripts.some((path) => path.startsWith("/article-toc.js"));
+  const autoArticleScripts = hasArticlePage && !hasArticleTocScript ? ["/article-toc.js?v=3"] : [];
+  const scripts = [...(user || publicReadEnabled ? ["/search-suggest.js?v=2", "/cmd-palette.js?v=1"] : []), ...optionScripts, ...autoArticleScripts]
     .filter((scriptPath) => scriptPath.startsWith("/"))
     .map((scriptPath) => `<script src="${escapeHtml(scriptPath)}" defer></script>`)
     .join("\n");
@@ -98,9 +102,9 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <meta name="color-scheme" content="light dark" />
-    <script src="/theme-init.js?v=2"></script>
+    <script src="/theme-init.js?v=3"></script>
     <title>${title}</title>
-    <link rel="stylesheet" href="/styles.css?v=31" />
+    <link rel="stylesheet" href="/styles.css?v=32" />
   </head>
   <body>
     <header class="site-header ${showHeaderSearch ? "" : "site-header-no-search"}">
@@ -122,7 +126,7 @@ export const renderLayout = (options: LayoutOptions): string => {
       <a href="/impressum">Impressum</a>
     </footer>
     <script src="/utils.js?v=1"></script>
-    <script src="/theme-toggle.js?v=2" defer></script>
+    <script src="/theme-toggle.js?v=3" defer></script>
     ${scripts}
   </body>
 </html>`;

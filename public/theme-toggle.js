@@ -2,9 +2,11 @@
   "use strict";
 
   function getEffective() {
+    var attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "dark" || attr === "light") return attr;
     var s = localStorage.getItem("fw-theme");
     if (s === "dark" || s === "light") return s;
-    return matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light";
+    return "dark";
   }
 
   function apply(theme) {
