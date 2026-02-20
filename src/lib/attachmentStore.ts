@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -250,14 +250,28 @@ const validateMimeAndMagic = async (filePath: string, extension: string, mimeTyp
 };
 
 const commandExists = async (commandName: string): Promise<boolean> => {
-  return new Promise<boolean>((resolve) => {
-    const proc = spawn("sh", ["-lc", `command -v ${JSON.stringify(commandName)} >/dev/null 2>&1`], {
-      stdio: "ignore"
-    });
+  const normalized = commandName.trim();
+  if (!normalized) return false;
+  if (/[\r\n\t]/.test(normalized)) return false;
 
-    proc.on("error", () => resolve(false));
-    proc.on("exit", (code) => resolve(code === 0));
-  });
+  const isPath = normalized.includes("/") || normalized.startsWith(".");
+  const candidates = isPath
+    ? [path.resolve(normalized)]
+    : (process.env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((segment) => path.join(segment, normalized));
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate, fsConstants.X_OK);
+      return true;
+    } catch {
+      // continue
+    }
+  }
+
+  return false;
 };
 
 const runClamAvScan = async (filePath: string): Promise<AntivirusScanResult> => {

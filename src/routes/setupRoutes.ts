@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import {
   clearLoginCsrfToken,
   createLoginCsrfToken,
+  getRequestClientIp,
+  getRequestUserAgent,
   setSessionCookie,
   verifyLoginCsrfToken
 } from "../lib/auth.js";
@@ -111,9 +113,7 @@ export const registerSetupRoutes = async (app: FastifyInstance): Promise<void> =
       );
     }
 
-    const rawUserAgent = request.headers["user-agent"];
-    const userAgent = Array.isArray(rawUserAgent) ? rawUserAgent.join(" ") : rawUserAgent;
-    const session = await createSession(result.user.id, request.ip, userAgent);
+    const session = await createSession(result.user.id, getRequestClientIp(request), getRequestUserAgent(request));
     setSessionCookie(reply, session.id);
     clearLoginCsrfToken(reply);
 

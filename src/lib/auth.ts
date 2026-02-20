@@ -9,6 +9,8 @@ import { findUserById, hasAnyUser } from "./userStore.js";
 
 const SESSION_COOKIE = "fw_sid";
 const LOGIN_CSRF_COOKIE = "fw_login_csrf";
+const IPV6_MAPPED_V4_PREFIX = "::ffff:";
+const USER_AGENT_MAX_LENGTH = 512;
 
 const cookieOptions = {
   path: "/",
@@ -23,6 +25,31 @@ const safeEqual = (a: string, b: string): boolean => {
   if (aBuffer.length !== bBuffer.length) return false;
   return timingSafeEqual(aBuffer, bBuffer);
 };
+
+const normalizeClientIp = (ip: string | undefined): string | undefined => {
+  if (!ip) return undefined;
+  const normalized = ip.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized.startsWith(IPV6_MAPPED_V4_PREFIX)) {
+    return normalized.slice(IPV6_MAPPED_V4_PREFIX.length);
+  }
+  return normalized;
+};
+
+const normalizeUserAgent = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  const collapsed = value.replace(/[\r\n\t]+/g, " ").trim();
+  if (!collapsed) return undefined;
+  return collapsed.slice(0, USER_AGENT_MAX_LENGTH);
+};
+
+export const getRequestUserAgent = (request: FastifyRequest): string | undefined => {
+  const raw = request.headers["user-agent"];
+  const value = Array.isArray(raw) ? raw.join(" ") : raw;
+  return normalizeUserAgent(value);
+};
+
+export const getRequestClientIp = (request: FastifyRequest): string | undefined => normalizeClientIp(request.ip);
 
 export const setSessionCookie = (reply: FastifyReply, sessionId: string): void => {
   reply.setCookie(SESSION_COOKIE, sessionId, {
@@ -74,8 +101,9 @@ export const attachCurrentUser = async (request: FastifyRequest, reply: FastifyR
     return;
   }
 
-  const currentIp = request.ip;
-  if (session.ip && session.ip !== currentIp) {
+  const currentIp = getRequestClientIp(request);
+  const sessionIp = normalizeClientIp(session.ip);
+  if (sessionIp && sessionIp !== currentIp) {
     await deleteSession(sessionId);
     clearSessionCookie(reply);
     return;

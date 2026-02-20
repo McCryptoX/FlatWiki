@@ -4,6 +4,8 @@ import type { SessionRecord } from "../types.js";
 import { ensureFile, readJsonFile, writeJsonFile } from "./fileStore.js";
 
 let mutationQueue: Promise<void> = Promise.resolve();
+const IPV6_MAPPED_V4_PREFIX = "::ffff:";
+const USER_AGENT_MAX_LENGTH = 512;
 
 const withMutationLock = async <T>(task: () => Promise<T>): Promise<T> => {
   const waitFor = mutationQueue;
@@ -48,6 +50,23 @@ const nextExpiryIso = (): string => {
 
 const generateCsrfToken = (): string => randomBytes(32).toString("hex");
 
+const normalizeIp = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized.startsWith(IPV6_MAPPED_V4_PREFIX)) {
+    return normalized.slice(IPV6_MAPPED_V4_PREFIX.length);
+  }
+  return normalized;
+};
+
+const normalizeUserAgent = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  const collapsed = value.replace(/[\r\n\t]+/g, " ").trim();
+  if (!collapsed) return undefined;
+  return collapsed.slice(0, USER_AGENT_MAX_LENGTH);
+};
+
 /* ── Public API ───────────────────────────────────────────────────── */
 
 export const createSession = async (userId: string, ip?: string, userAgent?: string): Promise<SessionRecord> => {
@@ -61,8 +80,8 @@ export const createSession = async (userId: string, ip?: string, userAgent?: str
       csrfToken: generateCsrfToken(),
       createdAt: now,
       expiresAt: nextExpiryIso(),
-      ip,
-      userAgent
+      ip: normalizeIp(ip),
+      userAgent: normalizeUserAgent(userAgent)
     };
 
     sessions.push(session);

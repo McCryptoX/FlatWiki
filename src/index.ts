@@ -28,7 +28,8 @@ import { registerWikiRoutes } from "./routes/wikiRoutes.js";
 
 const app = Fastify({
   logger: true,
-  bodyLimit: 10 * 1024 * 1024
+  bodyLimit: 10 * 1024 * 1024,
+  trustProxy: config.trustProxy
 });
 
 const bootstrapDataStorage = async (): Promise<void> => {

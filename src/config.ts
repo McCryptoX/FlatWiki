@@ -14,6 +14,8 @@ interface InstallerResult {
 
 export type IndexBackend = "flat" | "sqlite";
 export type AttachmentScanMode = "auto" | "required" | "off";
+const HOST_PATTERN = /^[a-z0-9:.-]+$/i;
+const SCANNER_COMMAND_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 
 const appendMissingEnvKeys = (filePath: string): InstallerResult => {
   const result: InstallerResult = { created: false };
@@ -45,6 +47,7 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     INDEX_BACKEND: "flat",
     ATTACHMENT_SCAN_MODE: "auto",
     ATTACHMENT_SCANNER_CMD: "clamscan",
+    TRUST_PROXY: "false",
     BOOTSTRAP_ADMIN_USERNAME: "admin"
   };
 
@@ -82,7 +85,8 @@ const hasExternalConfig = [
   "PUBLIC_BASE_URL",
   "INDEX_BACKEND",
   "ATTACHMENT_SCAN_MODE",
-  "ATTACHMENT_SCANNER_CMD"
+  "ATTACHMENT_SCANNER_CMD",
+  "TRUST_PROXY"
 ].some((key) => Boolean(process.env[key]));
 
 const installerResult = fs.existsSync(configEnvPath) || !hasExternalConfig
@@ -125,6 +129,29 @@ const parseAttachmentScanMode = (value: string | undefined): AttachmentScanMode 
   return "auto";
 };
 
+const parseHost = (value: string | undefined): string => {
+  const normalized = (value ?? "0.0.0.0").trim();
+  if (!normalized) return "0.0.0.0";
+  if (normalized === "::" || normalized === "::1") return normalized;
+  if (!HOST_PATTERN.test(normalized)) {
+    console.warn(`[WARN] HOST ungültig (${normalized}). Fallback auf 0.0.0.0.`);
+    return "0.0.0.0";
+  }
+  return normalized;
+};
+
+const parseAttachmentScannerCommand = (value: string | undefined): string => {
+  const normalized = (value ?? "clamscan").trim();
+  if (!normalized) return "clamscan";
+  if (!SCANNER_COMMAND_PATTERN.test(normalized)) {
+    console.warn(`[WARN] ATTACHMENT_SCANNER_CMD ungültig (${normalized}). Fallback auf clamscan.`);
+    return "clamscan";
+  }
+  return normalized;
+};
+
+const parseTrustProxy = (value: string | undefined): boolean => parseBoolean(value, false);
+
 const parseHexKey = (value: string | undefined, name: string): Buffer | null => {
   const raw = (value ?? "").trim();
   if (!raw) return null;
@@ -149,9 +176,10 @@ const runtimeIntegrityKey = parseIntegrityKey(process.env.CONTENT_INTEGRITY_KEY)
 export const config = {
   rootDir,
   port: parsePositiveInt(process.env.PORT, 3000),
-  host: process.env.HOST ?? "0.0.0.0",
+  host: parseHost(process.env.HOST),
   cookieSecret: process.env.COOKIE_SECRET ?? "dev-only-change-cookie-secret-please",
   isProduction: process.env.NODE_ENV === "production",
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   sessionTtlHours: parsePositiveInt(process.env.SESSION_TTL_HOURS, 12),
   backupAutoEnabled: parseBoolean(process.env.BACKUP_AUTO_ENABLED, false),
   backupAutoIntervalHours: parsePositiveInt(process.env.BACKUP_AUTO_INTERVAL_HOURS, 24),
@@ -163,7 +191,7 @@ export const config = {
   publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, ""),
   indexBackend: parseIndexBackend(process.env.INDEX_BACKEND),
   attachmentScanMode: parseAttachmentScanMode(process.env.ATTACHMENT_SCAN_MODE),
-  attachmentScannerCommand: (process.env.ATTACHMENT_SCANNER_CMD ?? "clamscan").trim() || "clamscan",
+  attachmentScannerCommand: parseAttachmentScannerCommand(process.env.ATTACHMENT_SCANNER_CMD),
   bootstrapAdminUsername: process.env.BOOTSTRAP_ADMIN_USERNAME ?? "admin",
   contentEncryptionKey: runtimeEncryptionKey,
   contentIntegrityKey: runtimeIntegrityKey,

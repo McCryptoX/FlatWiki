@@ -3,6 +3,8 @@ import {
   clearLoginCsrfToken,
   clearSessionCookie,
   createLoginCsrfToken,
+  getRequestClientIp,
+  getRequestUserAgent,
   requireAuth,
   setSessionCookie,
   verifyLoginCsrfToken,
@@ -114,16 +116,13 @@ export const registerAuthRoutes = async (app: FastifyInstance): Promise<void> =>
           action: "login_failed",
           details: {
             username,
-            ip: request.ip
+            ip: getRequestClientIp(request)
           }
         });
         return reply.redirect(`/login?error=${encodeURIComponent(error ?? "Anmeldung fehlgeschlagen")}`);
       }
 
-      const rawUserAgent = request.headers["user-agent"];
-      const userAgent = Array.isArray(rawUserAgent) ? rawUserAgent.join(" ") : rawUserAgent;
-
-      const session = await createSession(user.id, request.ip, userAgent);
+      const session = await createSession(user.id, getRequestClientIp(request), getRequestUserAgent(request));
       setSessionCookie(reply, session.id);
       clearLoginCsrfToken(reply);
       await touchLastLogin(user.id);
@@ -132,7 +131,7 @@ export const registerAuthRoutes = async (app: FastifyInstance): Promise<void> =>
         action: "login_success",
         actorId: user.id,
         details: {
-          ip: request.ip
+          ip: getRequestClientIp(request)
         }
       });
 
