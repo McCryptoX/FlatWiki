@@ -12,6 +12,12 @@ const _themeInitPath = path.join(config.rootDir, "public", "theme-init.js");
 const _themeInitScript = readFileSync(_themeInitPath, "utf-8").trim();
 export const themeInitCspHash = `'sha256-${createHash("sha256").update(_themeInitScript).digest("base64")}'`;
 
+// theme.css einmal beim Modulstart lesen und CSP-Hash berechnen.
+// Inline als <style> eingebettet – eliminiert den render-blockierenden Roundtrip.
+const _themeCssPath = path.join(config.rootDir, "public", "css", "theme.css");
+const _themeCss = readFileSync(_themeCssPath, "utf-8").trim();
+export const themeCssCspHash = `'sha256-${createHash("sha256").update(_themeCss).digest("base64")}'`;
+
 const siteTitle = config.wikiTitle;
 
 export const escapeHtml = (value: string): string =>
@@ -153,8 +159,8 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta property="og:description" content="${description}" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="${escapeHtml(canonicalHref)}" />
+    <style>${_themeCss}</style>
     <link rel="preload" href="/css/components.css?v=3" as="style" />
-    <link rel="stylesheet" href="/css/theme.css?v=2" />
     <link rel="stylesheet" href="/css/components.css?v=3" />
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"${escapeHtml(siteTitle)}","url":"${escapeHtml((config.publicBaseUrl || "").replace(/\/+$/, "") || "/")}"}</script>
   </head>
