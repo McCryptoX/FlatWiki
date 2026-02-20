@@ -13,7 +13,21 @@ SMOKE_PAGE_CONTENT="Dieser Artikel wurde im automatischen Smoketest erstellt."
 SMOKE_ADMIN_USER="${SMOKE_ADMIN_USER:-admin}"
 SMOKE_ADMIN_PASSWORD="${SMOKE_ADMIN_PASSWORD:-FlatWikiSmoke123!}"
 SMOKE_BACKUP_KEY="${SMOKE_BACKUP_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
+SMOKE_PUBLIC_READ="${SMOKE_PUBLIC_READ:-true}"
 APP_PID=""
+
+normalize_smoke_public_read() {
+  local raw
+  raw="$(printf '%s' "${SMOKE_PUBLIC_READ}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    true|1|yes|on) printf 'true' ;;
+    false|0|no|off) printf 'false' ;;
+    *)
+      echo "Warnung: Ungültiger SMOKE_PUBLIC_READ='${SMOKE_PUBLIC_READ}', nutze true." >&2
+      printf 'true'
+      ;;
+  esac
+}
 
 assert_tools() {
   local missing=0
@@ -176,7 +190,12 @@ EOF
 }
 
 start_app() {
+  local smoke_public_read
+  smoke_public_read="$(normalize_smoke_public_read)"
   mkdir -p "${RUNTIME_DIR}/data"
+  cat >"${RUNTIME_DIR}/data/runtime-settings.json" <<EOF
+{"publicRead":${smoke_public_read}}
+EOF
   cp -R "${ROOT_DIR}/public" "${RUNTIME_DIR}/public"
   if [[ -d "${ROOT_DIR}/data/wiki" ]]; then
     mkdir -p "${RUNTIME_DIR}/data/wiki"
