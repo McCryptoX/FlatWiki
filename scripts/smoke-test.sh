@@ -239,6 +239,82 @@ create_page() {
   printf '%s' "${csrf}"
 }
 
+check_etag_caching() {
+  local headers_file="${RUNTIME_DIR}/etag_headers.txt"
+  local wiki_url="${BASE_URL}/wiki/${SMOKE_PAGE_SLUG}"
+
+  # ── 1. Gast-Request: ETag-Header und Cache-Control prüfen ────────────────
+  local http_code
+  http_code="$(
+    curl -sS -D "${headers_file}" -o /dev/null -w "%{http_code}" "${wiki_url}"
+  )"
+  if [[ "${http_code}" != "200" ]]; then
+    echo "Fehler: ETag-Test – Gast-Request erwartete 200, erhalten: ${http_code}" >&2
+    exit 1
+  fi
+
+  local etag
+  etag="$(grep -i '^etag:' "${headers_file}" | sed -E 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*//' | tr -d '\r\n')"
+  if [[ -z "${etag}" ]]; then
+    echo "Fehler: ETag-Test – kein ETag-Header im Gast-Response." >&2
+    exit 1
+  fi
+
+  local cc
+  cc="$(grep -i '^cache-control:' "${headers_file}" | sed -E 's/^[Cc][Aa][Cc][Hh][Ee]-[Cc][Oo][Nn][Tt][Rr][Oo][Ll]:[[:space:]]*//' | tr -d '\r\n')"
+  if [[ "${cc}" != *"private"* ]] || [[ "${cc}" != *"no-cache"* ]]; then
+    echo "Fehler: ETag-Test – Cache-Control falsch für Gast: '${cc}'" >&2
+    exit 1
+  fi
+
+  # ── 2. Revalidierung mit korrektem ETag → 304 ────────────────────────────
+  local revalidate_code
+  revalidate_code="$(
+    curl -sS -o /dev/null -w "%{http_code}" \
+      -H "If-None-Match: ${etag}" \
+      "${wiki_url}"
+  )"
+  if [[ "${revalidate_code}" != "304" ]]; then
+    echo "Fehler: ETag-Test – Revalidierung erwartete 304, erhalten: ${revalidate_code}" >&2
+    exit 1
+  fi
+
+  # ── 3. Veraltetes ETag → 200 (kein 304) ──────────────────────────────────
+  local stale_code
+  stale_code="$(
+    curl -sS -o /dev/null -w "%{http_code}" \
+      -H 'If-None-Match: W/"stale-etag-does-not-match"' \
+      "${wiki_url}"
+  )"
+  if [[ "${stale_code}" != "200" ]]; then
+    echo "Fehler: ETag-Test – veraltetes ETag erwartete 200, erhalten: ${stale_code}" >&2
+    exit 1
+  fi
+
+  # ── 4. Auth-Request: kein ETag, Cache-Control: no-store ──────────────────
+  local auth_headers="${RUNTIME_DIR}/auth_etag_headers.txt"
+  local auth_code
+  auth_code="$(
+    curl -sS -b "${COOKIE_JAR}" -D "${auth_headers}" \
+      -o /dev/null -w "%{http_code}" \
+      "${wiki_url}"
+  )"
+  if [[ "${auth_code}" != "200" ]]; then
+    echo "Fehler: ETag-Test – Auth-Request erwartete 200, erhalten: ${auth_code}" >&2
+    exit 1
+  fi
+  if grep -qi '^etag:' "${auth_headers}"; then
+    echo "Fehler: ETag-Test – Auth-Response enthält unerwarteten ETag-Header." >&2
+    exit 1
+  fi
+  local auth_cc
+  auth_cc="$(grep -i '^cache-control:' "${auth_headers}" | sed -E 's/^[Cc][Aa][Cc][Hh][Ee]-[Cc][Oo][Nn][Tt][Rr][Oo][Ll]:[[:space:]]*//' | tr -d '\r\n')"
+  if [[ "${auth_cc}" != *"no-store"* ]]; then
+    echo "Fehler: ETag-Test – Cache-Control falsch für Auth-User: '${auth_cc}'" >&2
+    exit 1
+  fi
+}
+
 run_backup_and_restore() {
   local csrf="$1"
   local start_json started
@@ -315,8 +391,9 @@ main() {
   login_admin
   local csrf
   csrf="$(create_page)"
+  check_etag_caching
   run_backup_and_restore "${csrf}"
-  echo "OK: Smoketest erfolgreich (Login, Seite erstellen, Backup/Restore)."
+  echo "OK: Smoketest erfolgreich (Login, Seite erstellen, ETag/Caching, Backup/Restore)."
 }
 
 main "$@"
