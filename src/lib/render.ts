@@ -1,6 +1,16 @@
+import path from "node:path";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { config } from "../config.js";
 import { getPublicReadEnabled } from "./runtimeSettingsStore.js";
 import type { PublicUser, WikiPageSummary } from "../types.js";
+
+// theme-init.js einmal beim Modulstart lesen und CSP-Hash berechnen.
+// So kann das Script inline eingebettet werden (kein extra Netzwerk-Roundtrip),
+// ohne 'unsafe-inline' in der CSP zu benötigen.
+const _themeInitPath = path.join(config.rootDir, "public", "theme-init.js");
+const _themeInitScript = readFileSync(_themeInitPath, "utf-8").trim();
+export const themeInitCspHash = `'sha256-${createHash("sha256").update(_themeInitScript).digest("base64")}'`;
 
 const siteTitle = config.wikiTitle;
 
@@ -135,7 +145,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <meta name="color-scheme" content="light dark" />
-    <script src="/theme-init.js?v=3"></script>
+    <script>${_themeInitScript}</script>
     <title>${title}</title>
     <meta name="description" content="${description}" />
     <link rel="canonical" href="${escapeHtml(canonicalHref)}" />
@@ -143,6 +153,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta property="og:description" content="${description}" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="${escapeHtml(canonicalHref)}" />
+    <link rel="preload" href="/css/components.css?v=3" as="style" />
     <link rel="stylesheet" href="/css/theme.css?v=2" />
     <link rel="stylesheet" href="/css/components.css?v=3" />
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"${escapeHtml(siteTitle)}","url":"${escapeHtml((config.publicBaseUrl || "").replace(/\/+$/, "") || "/")}"}</script>

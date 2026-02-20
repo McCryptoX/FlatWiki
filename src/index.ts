@@ -8,6 +8,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { config } from "./config.js";
 import { attachCurrentUser } from "./lib/auth.js";
+import { themeInitCspHash } from "./lib/render.js";
 import { ensureDefaultCategory } from "./lib/categoryStore.js";
 import { initBackupAutomation } from "./lib/backupStore.js";
 import { ensureDir, ensureFile } from "./lib/fileStore.js";
@@ -79,6 +80,7 @@ const registerPlugins = async (): Promise<void> => {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", themeInitCspHash],
         styleSrc: ["'self'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:", "https:"],
