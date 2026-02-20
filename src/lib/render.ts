@@ -167,7 +167,7 @@ export const renderLayout = (options: LayoutOptions): string => {
       ${navRight}
     </header>
     <div class="mobile-overlay" data-mobile-overlay hidden></div>
-    <aside class="mobile-sidebar" id="mobile-sidebar" data-mobile-sidebar aria-hidden="true">
+    <aside class="mobile-sidebar" id="mobile-sidebar" data-mobile-sidebar aria-hidden="true" inert>
       <div class="mobile-sidebar-head">
         <strong>${escapeHtml(siteTitle)}</strong>
         <button type="button" class="ghost tiny" data-mobile-menu-close aria-label="Navigation schließen" title="Navigation schließen">✕</button>

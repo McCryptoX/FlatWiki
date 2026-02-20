@@ -98,7 +98,14 @@
         mobileOverlay.hidden = !open;
         mobileToggle.setAttribute("aria-expanded", open ? "true" : "false");
         mobileSidebar.setAttribute("aria-hidden", open ? "false" : "true");
+        mobileSidebar.toggleAttribute("inert", !open);
         document.body.classList.toggle("mobile-menu-open", open);
+        if (open) {
+          const first = mobileSidebar.querySelector("button, a");
+          if (first instanceof HTMLElement) first.focus();
+        } else {
+          mobileToggle.focus();
+        }
       };
 
       mobileToggle.addEventListener("click", () => {
