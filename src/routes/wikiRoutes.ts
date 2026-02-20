@@ -85,6 +85,14 @@ const serializeJsonForHtmlScript = (value: unknown): string =>
     .replace(/>/g, "\\u003e")
     .replace(/&/g, "\\u0026");
 
+const wantsJsonResponse = (request: { headers: Record<string, string | string[] | undefined> }): boolean => {
+  const acceptHeader = request.headers.accept;
+  const accepted = Array.isArray(acceptHeader) ? acceptHeader.join(",") : acceptHeader ?? "";
+  const requestedWith = request.headers["x-requested-with"];
+  const requestedWithValue = Array.isArray(requestedWith) ? requestedWith[0] ?? "" : requestedWith ?? "";
+  return accepted.includes("application/json") || requestedWithValue.toLowerCase() === "xmlhttprequest";
+};
+
 const normalizeUsernames = (values: string[]): string[] => {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -1216,6 +1224,12 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
     const articleToc = renderArticleToc(page.slug, page.tableOfContents);
     const backlinks = await listPageBacklinks(page.slug, request.currentUser);
+    const isWatching = request.currentUser
+      ? await isUserWatchingPage({
+          userId: request.currentUser.id,
+          slug: page.slug
+        })
+      : false;
     const integrityLabel =
       page.integrityState === "valid"
         ? "geprüft"
@@ -1249,7 +1263,20 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
             <div class="actions">
               ${
                 request.currentUser
-                  ? `<a class="button secondary" href="/wiki/${encodeURIComponent(page.slug)}/edit">Bearbeiten</a>`
+                  ? `<a class="button secondary" href="/wiki/${encodeURIComponent(page.slug)}/edit">Bearbeiten</a>
+                     <form method="post" action="/wiki/${encodeURIComponent(page.slug)}/watch" class="inline-watch-form" data-watch-form>
+                       <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                       <input type="hidden" name="mode" value="toggle" />
+                       <button
+                         type="submit"
+                         class="button secondary watch-toggle ${isWatching ? "is-watching" : ""}"
+                         data-watch-button
+                         aria-pressed="${isWatching ? "true" : "false"}"
+                       >
+                         <span data-watch-label>${isWatching ? "Beobachtet" : "Beobachten"}</span>
+                       </button>
+                       <span class="watch-feedback muted-note small" data-watch-feedback role="status" aria-live="polite"></span>
+                     </form>`
                   : ""
               }
               <a class="button secondary" href="/wiki/${encodeURIComponent(page.slug)}/history">Historie</a>
@@ -1286,10 +1313,77 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
+        notice: readSingle(asObject(request.query).notice),
         error: readSingle(asObject(request.query).error),
-        scripts: articleToc ? ["/article-toc.js?v=2"] : undefined
+        scripts: ["/js/main.js?v=1", ...(articleToc ? ["/article-toc.js?v=2"] : [])]
       })
     );
+  });
+
+  app.post("/wiki/:slug/watch", { preHandler: [requireAuth] }, async (request, reply) => {
+    const params = request.params as { slug: string };
+    const body = asObject(request.body);
+    const requestedJson = wantsJsonResponse(request);
+    const normalizedSlug = params.slug.trim().toLowerCase();
+    const currentUser = request.currentUser;
+
+    const fail = (status: number, message: string) => {
+      if (requestedJson) {
+        return reply.code(status).send({ ok: false, error: message });
+      }
+      return reply.redirect(`/wiki/${encodeURIComponent(normalizedSlug)}?error=${encodeURIComponent(message)}`);
+    };
+
+    if (!currentUser) {
+      return fail(401, "Anmeldung erforderlich.");
+    }
+
+    if (!verifySessionCsrfToken(request, readSingle(body._csrf))) {
+      return fail(400, "Ungültiges CSRF-Token.");
+    }
+
+    const page = await getPage(normalizedSlug);
+    if (!page) {
+      return fail(404, "Seite nicht gefunden.");
+    }
+
+    if (!canUserAccessPage(page, currentUser)) {
+      return fail(403, "Kein Zugriff auf diesen Artikel.");
+    }
+
+    const targetSlug = page.slug;
+    const mode = readSingle(body.mode).trim().toLowerCase();
+    const currentWatching = await isUserWatchingPage({ userId: currentUser.id, slug: targetSlug });
+    const shouldWatch = mode === "watch" ? true : mode === "unwatch" ? false : !currentWatching;
+
+    const result = shouldWatch
+      ? await watchPage({ userId: currentUser.id, slug: targetSlug })
+      : await unwatchPage({ userId: currentUser.id, slug: targetSlug });
+
+    if (!result.ok) {
+      return fail(500, "Watch-Status konnte nicht gespeichert werden.");
+    }
+
+    const watching = await isUserWatchingPage({ userId: currentUser.id, slug: targetSlug });
+    const message = watching ? "Seite wird jetzt beobachtet." : "Beobachtung wurde entfernt.";
+
+    await writeAuditLog({
+      action: watching ? "wiki_page_watch_enabled" : "wiki_page_watch_disabled",
+      actorId: currentUser.id,
+      targetId: targetSlug
+    });
+
+    if (requestedJson) {
+      return reply.send({
+        ok: true,
+        slug: targetSlug,
+        watching,
+        changed: result.changed,
+        message
+      });
+    }
+
+    return reply.redirect(`/wiki/${encodeURIComponent(targetSlug)}?notice=${encodeURIComponent(message)}`);
   });
 
   app.get("/new", { preHandler: [requireAuth] }, async (request, reply) => {

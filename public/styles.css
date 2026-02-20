@@ -1261,6 +1261,40 @@ a[aria-disabled="true"] {
   flex-wrap: wrap;
 }
 
+.inline-watch-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.watch-toggle {
+  min-width: 8.6rem;
+}
+
+.watch-toggle.is-watching {
+  color: #fff;
+  border-color: transparent;
+  background: var(--success);
+}
+
+.watch-toggle.is-watching:hover {
+  background: var(--success);
+  filter: brightness(0.92);
+}
+
+.watch-toggle.is-pending {
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.watch-feedback {
+  min-height: 1rem;
+}
+
+.watch-feedback.is-error {
+  color: var(--danger);
+}
+
 /* ── Admin Nav ── */
 .admin-nav {
   width: 100%;
@@ -2145,5 +2179,13 @@ hr {
     position: static;
     max-height: none;
     overflow: visible;
+  }
+
+  .inline-watch-form {
+    width: 100%;
+  }
+
+  .watch-toggle {
+    width: 100%;
   }
 }
