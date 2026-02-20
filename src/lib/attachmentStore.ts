@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "../config.js";
-import { ensureDir, ensureFile, readJsonFile, removeFile, writeJsonFile } from "./fileStore.js";
+import { ensureDir, ensureFile, readJsonFile, removeFile, safeResolve, writeJsonFile } from "./fileStore.js";
 
 export type AttachmentScanStatus = "clean" | "skipped" | "failed";
 
@@ -331,7 +331,22 @@ const hashFileSha256 = async (filePath: string): Promise<string> => {
 
 const buildAttachmentStorageName = (extension: string): string => `${Date.now()}-${randomUUID().replaceAll("-", "")}.${extension}`;
 
-const resolveAttachmentPath = (storageName: string): string => path.join(config.attachmentsFileDir, storageName);
+const resolveAttachmentPath = (storageName: string): string => {
+  const normalizedStorageName = path.basename(String(storageName ?? "").trim());
+  if (!normalizedStorageName || normalizedStorageName !== String(storageName ?? "").trim()) {
+    throw new Error("Ungültiger Attachment-Pfad.");
+  }
+  return safeResolve(config.attachmentsFileDir, normalizedStorageName);
+};
+
+const resolveQuarantinePath = (inputPath: string): string => {
+  const normalizedName = path.basename(String(inputPath ?? "").trim());
+  if (!normalizedName) {
+    throw new Error("Ungültiger Quarantäne-Pfad.");
+  }
+  // Quarantine input must stay within the configured quarantine directory.
+  return safeResolve(config.attachmentsQuarantineDir, normalizedName);
+};
 
 export const listAttachmentsBySlug = async (slugInput: string): Promise<PageAttachment[]> => {
   const slug = normalizeSlug(slugInput);
@@ -353,6 +368,13 @@ export const getAttachmentById = async (idInput: string): Promise<PageAttachment
 
 export const finalizeAttachmentFromQuarantine = async (input: FinalizeAttachmentInput): Promise<FinalizeAttachmentResult> => {
   return withMutationLock(async () => {
+    let quarantinePath = "";
+    try {
+      quarantinePath = resolveQuarantinePath(input.quarantinePath);
+    } catch {
+      return { ok: false, error: "Ungültiger Upload-Kontext." };
+    }
+
     const slug = normalizeSlug(input.slug);
     const originalName = sanitizeOriginalFileName(input.originalName);
     const mimeType = String(input.mimeType ?? "application/octet-stream").trim().toLowerCase();
@@ -361,7 +383,7 @@ export const finalizeAttachmentFromQuarantine = async (input: FinalizeAttachment
     const uploadedByDisplayName = String(input.uploadedByDisplayName ?? "").trim() || uploadedByUsername;
 
     if (!slug || !uploadedById || !uploadedByUsername) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: "Ungültiger Upload-Kontext." };
     }
 
@@ -369,36 +391,36 @@ export const finalizeAttachmentFromQuarantine = async (input: FinalizeAttachment
 
     const extension = normalizeExtension(originalName);
     if (!extension || !ALLOWED_EXTENSION_TO_MIME.has(extension)) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: "Dateityp nicht erlaubt." };
     }
 
-    const stat = await fs.stat(input.quarantinePath).catch(() => null);
+    const stat = await fs.stat(quarantinePath).catch(() => null);
     if (!stat || !stat.isFile() || stat.size < 1) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: "Leere oder ungültige Datei." };
     }
 
-    const mimeCheck = await validateMimeAndMagic(input.quarantinePath, extension, mimeType);
+    const mimeCheck = await validateMimeAndMagic(quarantinePath, extension, mimeType);
     if (!mimeCheck.ok) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: mimeCheck.error ?? "Datei konnte nicht validiert werden." };
     }
 
-    const scan = await runClamAvScan(input.quarantinePath);
+    const scan = await runClamAvScan(quarantinePath);
     if (!scan.ok) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: `Virenscan fehlgeschlagen (${scan.reason}).` };
     }
 
     if (!scan.clean) {
-      await removeFile(input.quarantinePath);
+      await removeFile(quarantinePath);
       return { ok: false, error: "Virenscan hat potenziell schädliche Datei erkannt." };
     }
 
     const storageName = buildAttachmentStorageName(extension);
     const finalPath = resolveAttachmentPath(storageName);
-    await fs.rename(input.quarantinePath, finalPath);
+    await fs.rename(quarantinePath, finalPath);
 
     const sha256 = await hashFileSha256(finalPath);
 
@@ -454,7 +476,11 @@ export const deleteAttachmentById = async (input: {
 
     entries.splice(index, 1);
     await saveAttachments(entries);
-    await removeFile(resolveAttachmentPath(target.storageName));
+    try {
+      await removeFile(resolveAttachmentPath(target.storageName));
+    } catch {
+      // Keep metadata deletion successful even if storageName is malformed legacy data.
+    }
 
     return { ok: true, deleted: true, attachment: target };
   });
@@ -474,7 +500,11 @@ export const deleteAttachmentsForPage = async (slugInput: string): Promise<numbe
     await saveAttachments(remaining);
 
     for (const attachment of targets) {
-      await removeFile(resolveAttachmentPath(attachment.storageName));
+      try {
+        await removeFile(resolveAttachmentPath(attachment.storageName));
+      } catch {
+        // Ignore malformed legacy storage names during cleanup.
+      }
     }
 
     return targets.length;
@@ -495,7 +525,7 @@ export const createAttachmentQuarantinePath = async (originalName: string): Prom
   const extension = normalizeExtension(safeOriginalName) || "bin";
   const fileName = `${Date.now()}-${randomUUID().replaceAll("-", "")}.${extension}`;
   return {
-    path: path.join(config.attachmentsQuarantineDir, fileName),
+    path: safeResolve(config.attachmentsQuarantineDir, fileName),
     safeOriginalName
   };
 };

@@ -142,8 +142,8 @@ const start = async (): Promise<void> => {
     if (adminResult.created) {
       app.log.warn("Es wurde automatisch ein erster Admin angelegt.");
       app.log.warn(`Admin-Login: ${adminResult.username}`);
-      app.log.warn("Admin-Passwort wurde aus BOOTSTRAP_ADMIN_PASSWORD übernommen.");
-      app.log.warn("Bitte Passwort sofort nach dem ersten Login ändern.");
+      // Never log bootstrap password material; only emit an operational warning.
+      app.log.warn("Ein initiales Admin-Passwort wurde gesetzt. Bitte Passwort sofort nach dem ersten Login ändern.");
     } else if (adminResult.pendingSetup) {
       app.log.warn("Keine Benutzer vorhanden. Bitte Ersteinrichtung unter /setup durchführen.");
     }

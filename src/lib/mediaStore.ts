@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config.js";
-import { ensureDir, removeFile } from "./fileStore.js";
+import { ensureDir, removeFile, safeResolve } from "./fileStore.js";
 import { getPage, listPages } from "./wikiStore.js";
 
 const SAFE_UPLOAD_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9._-]{0,120}$/i;
@@ -206,7 +206,7 @@ export const deleteUploadFile = async (fileName: string): Promise<boolean> => {
     return false;
   }
 
-  const filePath = path.join(config.uploadDir, normalized);
+  const filePath = safeResolve(config.uploadDir, normalized);
 
   try {
     const stats = await fs.stat(filePath);

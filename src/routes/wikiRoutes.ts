@@ -21,7 +21,7 @@ import { listGroupIdsForUser, listGroups } from "../lib/groupStore.js";
 import { createNotification, deleteNotificationsForPage } from "../lib/notificationStore.js";
 import { listTemplates } from "../lib/templateStore.js";
 import { config } from "../config.js";
-import { ensureDir, removeFile } from "../lib/fileStore.js";
+import { ensureDir, removeFile, safeResolve } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
 import { listTrendingTopics, recordPageView } from "../lib/pageViewStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
@@ -1767,7 +1767,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const encryptedContext = ["1", "true", "on"].includes(readSingle(query.encrypted).trim().toLowerCase());
     const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
     const uploadSubDir = category.uploadFolder.trim() || "allgemein";
-    const uploadTargetDir = path.join(config.uploadDir, uploadSubDir);
+    const uploadTargetDir = safeResolve(config.uploadDir, uploadSubDir);
 
     if (!verifySessionCsrfToken(request, csrfValue)) {
       return reply.code(400).send({ ok: false, error: "Ungültiges CSRF-Token." });
@@ -1818,7 +1818,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         }
 
         const storedName = `${Date.now()}-${randomUUID().replaceAll("-", "")}.${extension}`;
-        const targetPath = path.join(uploadTargetDir, storedName);
+        const targetPath = safeResolve(uploadTargetDir, storedName);
 
         await pipeline(part.file, createWriteStream(targetPath, { flags: "wx" }));
 
