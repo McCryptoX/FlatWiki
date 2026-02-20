@@ -53,13 +53,13 @@ export const renderLayout = (options: LayoutOptions): string => {
 
   const navRight = user
     ? `
-      <div class="nav-right">
+      <nav class="nav-right" aria-label="Hauptnavigation">
         ${themeToggle}
         <span class="welcome">${escapeHtml(user.displayName)}</span>
         <a href="/toc">Inhaltsverzeichnis</a>
         <a href="/notifications">Benachrichtigungen${
           user.unreadNotificationsCount && user.unreadNotificationsCount > 0
-            ? ` <span class="notif-badge">${Math.min(user.unreadNotificationsCount, 99)}</span>`
+            ? ` <span class="notif-badge" aria-label="${Math.min(user.unreadNotificationsCount, 99)} ungelesen">${Math.min(user.unreadNotificationsCount, 99)}</span>`
             : ""
         }</a>
         <a href="/account">Konto</a>
@@ -72,9 +72,9 @@ export const renderLayout = (options: LayoutOptions): string => {
           <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken ?? "")}" />
           <button type="submit" class="ghost">Abmelden</button>
         </form>
-      </div>
+      </nav>
     `
-    : `<div class="nav-right">${themeToggle} <a href="/login">Anmelden</a></div>`;
+    : `<nav class="nav-right" aria-label="Hauptnavigation">${themeToggle} <a href="/login">Anmelden</a></nav>`;
 
   const mobileSidebarNav = user
     ? `
@@ -135,39 +135,20 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="same-origin" />
     <meta name="color-scheme" content="light dark" />
-    <script>
-      (() => {
-        const root = document.documentElement;
-        const serverTheme = root.getAttribute("data-theme");
-        if (serverTheme === "dark" || serverTheme === "light") {
-          try {
-            localStorage.setItem("fw-theme", serverTheme);
-          } catch {}
-          return;
-        }
-        let resolved = "dark";
-        try {
-          const saved = localStorage.getItem("fw-theme");
-          if (saved === "dark" || saved === "light") {
-            resolved = saved;
-          } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
-            resolved = "light";
-          }
-        } catch {
-          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
-            resolved = "light";
-          }
-        }
-        root.setAttribute("data-theme", resolved);
-      })();
-    </script>
+    <script src="/theme-init.js?v=3"></script>
     <title>${title}</title>
     <meta name="description" content="${description}" />
     <link rel="canonical" href="${escapeHtml(canonicalHref)}" />
+    <meta property="og:title" content="${escapeHtml(resolvedTitle || siteTitle)}" />
+    <meta property="og:description" content="${description}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${escapeHtml(canonicalHref)}" />
     <link rel="stylesheet" href="/css/theme.css?v=2" />
     <link rel="stylesheet" href="/css/components.css?v=3" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"${escapeHtml(siteTitle)}","url":"${escapeHtml((config.publicBaseUrl || "").replace(/\/+$/, "") || "/")}"}</script>
   </head>
   <body>
+    <a href="#main-content" class="skip-to-main">Zum Hauptinhalt springen</a>
     <header class="site-header ${showHeaderSearch ? "" : "site-header-no-search"}">
       <div>
         <a href="/" class="brand">${escapeHtml(siteTitle)}</a>
@@ -197,7 +178,7 @@ export const renderLayout = (options: LayoutOptions): string => {
       </nav>
     </aside>
 
-    <main class="container">
+    <main class="container" id="main-content">
       ${flash}
       ${options.body}
     </main>
@@ -206,7 +187,7 @@ export const renderLayout = (options: LayoutOptions): string => {
       <a href="/privacy">Datenschutz</a>
       <a href="/impressum">Impressum</a>
     </footer>
-    <script src="/utils.js?v=1"></script>
+    <script src="/utils.js?v=1" defer></script>
     <script src="/theme-toggle.js?v=3" defer></script>
     ${scripts}
   </body>

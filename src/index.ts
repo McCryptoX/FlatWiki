@@ -97,13 +97,16 @@ const registerPlugins = async (): Promise<void> => {
 
   await app.register(fastifyStatic, {
     root: path.join(config.rootDir, "public"),
-    prefix: "/"
+    prefix: "/",
+    maxAge: 365 * 24 * 60 * 60 * 1000, // 1 Jahr für versionierte Assets (?v=X)
+    immutable: true
   });
 
   await app.register(fastifyStatic, {
     root: config.uploadDir,
     prefix: "/uploads/",
-    decorateReply: false
+    decorateReply: false,
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 Tage für Uploads
   });
 };
 
