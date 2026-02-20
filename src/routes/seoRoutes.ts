@@ -102,10 +102,15 @@ const loadEffectiveRobotsTxt = async (publicBaseUrl: string): Promise<string> =>
 
 const createEtag = (content: string): string => `"${createHash("sha256").update(content, "utf8").digest("hex")}"`;
 
+const normalizeWeakEtag = (value: string): string => value.trim().replace(/^W\//i, "");
+
 const isNotModified = (request: FastifyRequest, etag: string): boolean => {
   const incoming = request.headers["if-none-match"];
   const value = Array.isArray(incoming) ? incoming.join(",") : incoming ?? "";
-  return value.split(",").map((entry) => entry.trim()).includes(etag);
+  const candidates = value.split(",").map((entry) => entry.trim());
+  if (candidates.includes("*")) return true;
+  const normalizedExpected = normalizeWeakEtag(etag);
+  return candidates.some((entry) => normalizeWeakEtag(entry) === normalizedExpected);
 };
 
 const withCachingHeaders = (

@@ -61,12 +61,12 @@ export interface WriteResult {
  * Matches the slug pattern enforced across the rest of the codebase.
  * Rejects empty strings, "../" traversals, leading/trailing dashes, etc.
  */
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,79}$/;
 
 function assertValidSlug(slug: string): void {
   if (!SLUG_RE.test(slug)) {
     throw new RangeError(
-      `Invalid slug "${slug}" — must match /^[a-z0-9][a-z0-9-]{0,79}$/`,
+      `Invalid slug "${slug}" — must match /^[a-z0-9][a-z0-9_-]{0,79}$/`,
     );
   }
 }

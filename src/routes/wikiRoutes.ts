@@ -95,6 +95,17 @@ const wantsJsonResponse = (request: { headers: Record<string, string | string[] 
   return accepted.includes("application/json") || requestedWithValue.toLowerCase() === "xmlhttprequest";
 };
 
+const normalizeWeakEtag = (value: string): string => value.trim().replace(/^W\//i, "");
+
+const ifNoneMatchMatches = (ifNoneMatchHeader: string | string[] | undefined, etag: string): boolean => {
+  if (!ifNoneMatchHeader) return false;
+  const value = Array.isArray(ifNoneMatchHeader) ? ifNoneMatchHeader.join(",") : ifNoneMatchHeader;
+  const candidates = value.split(",").map((entry) => entry.trim());
+  if (candidates.includes("*")) return true;
+  const normalizedExpected = normalizeWeakEtag(etag);
+  return candidates.some((entry) => normalizeWeakEtag(entry) === normalizedExpected);
+};
+
 const normalizeUsernames = (values: string[]): string[] => {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -1263,21 +1274,22 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     }
 
     // ── ETag / HTTP-Caching ───────────────────────────────────────────────────
-    try {
-      const { etag: rawEtag } = await etagWikiPage(normalizedSlug);
-      const etag = `W/"${rawEtag}"`;
-      reply.header("ETag", etag);
-      reply.header("Cache-Control", "private, no-cache");
-      const ifNoneMatch = request.headers["if-none-match"];
-      if (ifNoneMatch) {
-        const value = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
-        const candidates = value.split(",").map((s) => s.trim());
-        if (candidates.includes("*") || candidates.includes(etag)) {
+    // Only use conditional 304 responses for non-personalized guest pages.
+    // Authenticated responses include user-specific fragments (watch state, badges).
+    if (!request.currentUser) {
+      try {
+        const { etag: rawEtag } = await etagWikiPage(normalizedSlug);
+        const etag = `W/"${rawEtag}"`;
+        reply.header("ETag", etag);
+        reply.header("Cache-Control", "private, no-cache");
+        if (ifNoneMatchMatches(request.headers["if-none-match"], etag)) {
           return reply.code(304).send();
         }
+      } catch {
+        // If ETag creation fails, continue with a normal full response.
       }
-    } catch {
-      // Slug nicht ETag-kompatibel (z.B. Unterstriche) → kein ETag, normal weiter
+    } else {
+      reply.header("Cache-Control", "private, no-store");
     }
 
     try {
