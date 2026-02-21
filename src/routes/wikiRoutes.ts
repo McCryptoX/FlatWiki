@@ -321,18 +321,21 @@ const renderArticleToc = (slug: string, headings: Array<{ id: string; text: stri
 
   return `
     <aside class="article-toc" aria-label="Inhaltsverzeichnis">
-      <h2>Inhaltsverzeichnis</h2>
-      <ul>
-        ${headings
-          .map(
-            (heading) => `
-              <li class="depth-${Math.min(Math.max(heading.depth, 2), 6)}">
-                <a href="/wiki/${encodeURIComponent(slug)}#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>
-              </li>
-            `
-          )
-          .join("")}
-      </ul>
+      <button type="button" class="toc-toggle" aria-expanded="false">Inhaltsverzeichnis</button>
+      <div class="toc-body">
+        <h2>Inhaltsverzeichnis</h2>
+        <ul>
+          ${headings
+            .map(
+              (heading) => `
+                <li class="depth-${Math.min(Math.max(heading.depth, 2), 6)}">
+                  <a href="/wiki/${encodeURIComponent(slug)}#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>
+                </li>
+              `
+            )
+            .join("")}
+        </ul>
+      </div>
     </aside>
   `;
 };
