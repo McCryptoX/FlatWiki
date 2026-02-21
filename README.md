@@ -94,7 +94,7 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
   - Cooldown und Duplikat-Schutz gegen Spam
 - Upload-Schutz für `/uploads/*` konsistent mit Auth/Public-Read-Modus
 - E-Mail-Verwaltung im Admin (`/admin/mail`) inkl. SMTP-Testmail
-  - SMTP- und User-E-Mail-Daten lokal verschlüsselt gespeichert (bei gesetztem `CONTENT_ENCRYPTION_KEY`)
+  - SMTP- und User-E-Mail-Daten lokal verschlüsselt gespeichert (bei gesetztem `SECRET_ENCRYPTION_KEY`, sonst `CONTENT_ENCRYPTION_KEY`-Fallback)
 - Stabilitäts-Checks in CI (Merge-Konfliktmarker, TypeScript-Build, Smoketest, Docker-Build)
 - 1-Klick Domain/HTTPS-Setup-Script mit Caddy + Let's Encrypt (ACME): `scripts/deploy-caddy.sh`
 
@@ -306,6 +306,7 @@ sudo ./scripts/setup-fail2ban-caddy.sh --instance-dir /opt/flatwiki-private --ja
 - `PASSWORD_PEPPER` nach dem ersten produktiven Start nicht mehr ändern, sonst funktionieren bestehende Passwörter nicht mehr.
 - Kryptoschlüssel werden nicht separat im `data/`-Ordner persistiert. Quelle ist ausschließlich `config.env`.
 - `CONTENT_ENCRYPTION_KEY` nach produktivem Start nicht mehr ändern, sonst können bestehende verschlüsselte Artikel nicht mehr gelesen werden.
+- `SECRET_ENCRYPTION_KEY` nach produktivem Start nicht mehr ändern, sonst können gespeicherte SMTP-/User-Secrets nicht mehr gelesen werden.
 - `CONTENT_INTEGRITY_KEY` nach produktivem Start nicht mehr ändern, sonst schlagen Integritätsprüfungen signierter Artikel fehl.
 - `BACKUP_ENCRYPTION_KEY` nach produktivem Start nicht leichtfertig ändern, sonst sind ältere Backups u.U. nicht mehr entschlüsselbar.
 - Sensibler Modus funktioniert nur mit `CONTENT_ENCRYPTION_KEY`; ohne Schlüssel ist die Option im Editor deaktiviert.
@@ -314,6 +315,7 @@ sudo ./scripts/setup-fail2ban-caddy.sh --instance-dir /opt/flatwiki-private --ja
 - Keine Secrets committen. `config.env` bleibt lokal; nur `config.env.example` wird versioniert.
 - Uploads liegen in `data/uploads/` (pro Kategorie in Unterordnern) und werden als `/uploads/...` bereitgestellt.
 - Für Backup-Verschlüsselung einen separaten Schlüssel nutzen (`BACKUP_ENCRYPTION_KEY`), nicht `CONTENT_ENCRYPTION_KEY`.
+- Für Secret-Storage einen separaten Schlüssel nutzen (`SECRET_ENCRYPTION_KEY`), nicht `CONTENT_ENCRYPTION_KEY`.
 
 ## Erstes Admin-Konto
 
@@ -382,6 +384,7 @@ Optional:
 
 - `PASSWORD_PEPPER`
 - `CONTENT_ENCRYPTION_KEY` (64 Hex, AES-256-GCM für Artikelinhalt)
+- `SECRET_ENCRYPTION_KEY` (64 Hex, AES-256-GCM für SMTP-/User-Secrets; Fallback: `CONTENT_ENCRYPTION_KEY`)
 - `BOOTSTRAP_ADMIN_USERNAME`
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `WIKI_TITLE`

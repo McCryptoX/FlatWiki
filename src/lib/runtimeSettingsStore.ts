@@ -325,7 +325,7 @@ export const setSmtpSettings = async (input: {
     };
 
     if (nextSmtp.pass && !canEncryptSecrets()) {
-      console.warn("[runtime-settings] CONTENT_ENCRYPTION_KEY fehlt oder ungültig. SMTP-Passwort wird als Klartext gespeichert.");
+      console.warn("[runtime-settings] SECRET_ENCRYPTION_KEY (oder CONTENT_ENCRYPTION_KEY-Fallback) fehlt oder ist ungültig. SMTP-Passwort wird als Klartext gespeichert.");
     }
     await writeJsonFile(config.runtimeSettingsFile, next);
     currentSmtp = nextSmtp;

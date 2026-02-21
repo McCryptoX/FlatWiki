@@ -9,7 +9,8 @@ import sanitizeHtml from "sanitize-html";
 import { config } from "../config.js";
 import type { PublicUser, SecurityProfile, WikiHeading, WikiPage, WikiPageSummary, WikiVisibility } from "../types.js";
 import { findCategoryById, getDefaultCategory, listCategories } from "./categoryStore.js";
-import { ensureDir, readJsonFile, readTextFile, removeFile, writeTextFile } from "./fileStore.js";
+import { deleteWikiPage, readWikiPage, writeWikiPage } from "./atomicIntegrityStore.js";
+import { ensureDir, readJsonFile, readTextFile, removeFile } from "./fileStore.js";
 import { listGroupIdsForUser } from "./groupStore.js";
 import { createPageVersionSnapshot, getPageVersion, listPageVersions, type PageVersionSummary } from "./pageVersionStore.js";
 import { getIndexBackend } from "./runtimeSettingsStore.js";
@@ -1435,7 +1436,8 @@ export const savePage = async (input: SavePageInput): Promise<{ ok: boolean; err
   }
 
   const frontmatter = matter.stringify(markdownBody, frontmatterData);
-  await writeTextFile(targetPath, frontmatter.endsWith("\n") ? frontmatter : `${frontmatter}\n`);
+  const serialized = frontmatter.endsWith("\n") ? frontmatter : `${frontmatter}\n`;
+  await writeWikiPage(slug, serialized);
 
   const normalizedTarget = path.normalize(targetPath);
   for (const existingPath of existingPaths) {
@@ -1490,7 +1492,16 @@ export const deletePage = async (
     };
   }
 
+  const primaryPath = resolvePagePath(normalizedSlug);
+  const normalizedPrimary = path.normalize(primaryPath);
+  const hasPrimaryPath = pagePaths.some((entry) => path.normalize(entry) === normalizedPrimary);
+
+  if (hasPrimaryPath) {
+    await deleteWikiPage(normalizedSlug);
+  }
+
   for (const pagePath of pagePaths) {
+    if (path.normalize(pagePath) === normalizedPrimary) continue;
     await removeFile(pagePath);
   }
   lastWikiMutationAtMs = Date.now();
@@ -1662,6 +1673,17 @@ export const getCurrentPageRawContent = async (slugInput: string): Promise<strin
   }
   const existingPath = await resolveExistingPagePath(slug);
   if (!existingPath) return null;
+
+  const primaryPath = resolvePagePath(slug);
+  if (path.normalize(existingPath) === path.normalize(primaryPath)) {
+    try {
+      const current = await readWikiPage(slug);
+      return current.content;
+    } catch {
+      return null;
+    }
+  }
+
   return await readTextFile(existingPath);
 };
 
@@ -1714,7 +1736,7 @@ export const restorePageVersion = async (input: {
   const existingPaths = await resolveAllPagePaths(slug);
   const raw = version.fileContent.endsWith("\n") ? version.fileContent : `${version.fileContent}\n`;
 
-  await writeTextFile(targetPath, raw);
+  await writeWikiPage(slug, raw);
 
   const normalizedTarget = path.normalize(targetPath);
   for (const existingPath of existingPaths) {

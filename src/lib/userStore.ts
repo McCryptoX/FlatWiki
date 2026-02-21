@@ -59,7 +59,7 @@ const loadUsers = async (): Promise<UserRecord[]> => {
 
 const saveUsers = async (users: UserRecord[]): Promise<void> => {
   if (!canEncryptSecrets() && users.some((user) => Boolean(user.email))) {
-    console.warn("[user-store] CONTENT_ENCRYPTION_KEY fehlt oder ungültig. E-Mail-Adressen werden als Klartext gespeichert.");
+    console.warn("[user-store] SECRET_ENCRYPTION_KEY (oder CONTENT_ENCRYPTION_KEY-Fallback) fehlt oder ist ungültig. E-Mail-Adressen werden als Klartext gespeichert.");
   }
 
   const persistable: PersistedUserRecord[] = users.map((user) => {

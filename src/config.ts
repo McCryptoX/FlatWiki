@@ -33,6 +33,7 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     COOKIE_SECRET: generateHex(32),
     PASSWORD_PEPPER: generateHex(24),
     CONTENT_ENCRYPTION_KEY: generateHex(32),
+    SECRET_ENCRYPTION_KEY: generateHex(32),
     CONTENT_INTEGRITY_KEY: generateHex(32),
     BACKUP_ENCRYPTION_KEY: generateHex(32),
     BACKUP_AUTO_ENABLED: "false",
@@ -76,6 +77,7 @@ const hasExternalConfig = [
   "COOKIE_SECRET",
   "PASSWORD_PEPPER",
   "CONTENT_ENCRYPTION_KEY",
+  "SECRET_ENCRYPTION_KEY",
   "CONTENT_INTEGRITY_KEY",
   "BACKUP_ENCRYPTION_KEY",
   "BACKUP_AUTO_ENABLED",
@@ -176,9 +178,11 @@ const parseHexKey = (value: string | undefined, name: string): Buffer | null => 
 };
 
 const parseEncryptionKey = (value: string | undefined): Buffer | null => parseHexKey(value, "CONTENT_ENCRYPTION_KEY");
+const parseSecretEncryptionKey = (value: string | undefined): Buffer | null => parseHexKey(value, "SECRET_ENCRYPTION_KEY");
 const parseIntegrityKey = (value: string | undefined): Buffer | null => parseHexKey(value, "CONTENT_INTEGRITY_KEY");
 
 const runtimeEncryptionKey = parseEncryptionKey(process.env.CONTENT_ENCRYPTION_KEY);
+const runtimeSecretEncryptionKey = parseSecretEncryptionKey(process.env.SECRET_ENCRYPTION_KEY);
 const runtimeIntegrityKey = parseIntegrityKey(process.env.CONTENT_INTEGRITY_KEY);
 
 export const config = {
@@ -202,6 +206,9 @@ export const config = {
   attachmentScannerCommand: parseAttachmentScannerCommand(process.env.ATTACHMENT_SCANNER_CMD),
   bootstrapAdminUsername: process.env.BOOTSTRAP_ADMIN_USERNAME ?? "admin",
   contentEncryptionKey: runtimeEncryptionKey,
+  // Secret-storage key is separated from article encryption key.
+  // Fallback to CONTENT_ENCRYPTION_KEY keeps existing installs readable.
+  secretEncryptionKey: runtimeSecretEncryptionKey ?? runtimeEncryptionKey,
   contentIntegrityKey: runtimeIntegrityKey,
   dataDir: path.join(rootDir, "data"),
   indexDir: path.join(rootDir, "data", "index"),

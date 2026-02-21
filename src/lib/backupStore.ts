@@ -811,6 +811,12 @@ const runBackup = async (): Promise<void> => {
       throw new Error("BACKUP_ENCRYPTION_KEY darf nicht identisch mit CONTENT_ENCRYPTION_KEY sein.");
     }
   }
+  if (config.secretEncryptionKey) {
+    const secretKeyHex = config.secretEncryptionKey.toString("hex");
+    if (backupPassphrase === secretKeyHex) {
+      throw new Error("BACKUP_ENCRYPTION_KEY darf nicht identisch mit SECRET_ENCRYPTION_KEY sein.");
+    }
+  }
 
   await ensureDir(config.backupDir);
 
