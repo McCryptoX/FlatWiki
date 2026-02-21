@@ -26,13 +26,15 @@ import { ensureDir, removeFile, safeResolve } from "../lib/fileStore.js";
 import { cleanupUnusedUploads, extractUploadReferencesFromMarkdown } from "../lib/mediaStore.js";
 import { listTrendingTopics, recordPageView } from "../lib/pageViewStore.js";
 import { escapeHtml, formatDate, renderLayout, renderPageList } from "../lib/render.js";
-import { getUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
+import { getCommentModerationSettings, getUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
 import { removeSearchIndexBySlug, upsertSearchIndexBySlug } from "../lib/searchIndexStore.js";
 import { buildUnifiedDiff } from "../lib/textDiff.js";
 import { findUserByUsername, listUsers } from "../lib/userStore.js";
 import { deleteWatchesForPage, isUserWatchingPage, listWatchersForPage, unwatchPage, watchPage } from "../lib/watchStore.js";
 import type { PublicUser, SecurityProfile, WikiPageSummary } from "../types.js";
 import { getPageWorkflow, removeWorkflowForPage, setPageWorkflow, type WorkflowStatus } from "../lib/workflowStore.js";
+import { parseSearchQuery } from "../lib/searchQuery.js";
+import { sendMentionNotification, sendPageUpdateNotification } from "../lib/mailer.js";
 import {
   canUserAccessPage,
   deletePage,
@@ -108,6 +110,52 @@ const ifNoneMatchMatches = (ifNoneMatchHeader: string | string[] | undefined, et
 
 const buildPageFallbackEtag = (slug: string, updatedAt: string): string =>
   createHash("sha256").update(`${slug}:${updatedAt}`, "utf8").digest("hex");
+
+const COMMENT_PAGE_SIZE = 50;
+const COMMENT_REPLY_MENTION_REGEX = /(^|[\s(>])@([a-z0-9._-]{3,32})\b/gi;
+
+const buildEditConflictToken = (page: {
+  slug: string;
+  title: string;
+  categoryId: string;
+  securityProfile: SecurityProfile;
+  visibility: "all" | "restricted";
+  allowedUsers: string[];
+  allowedGroups: string[];
+  encrypted: boolean;
+  tags: string[];
+  content: string;
+  updatedAt: string;
+  updatedBy: string;
+}): string =>
+  createHash("sha256")
+    .update(
+      JSON.stringify({
+        slug: page.slug,
+        title: page.title,
+        categoryId: page.categoryId,
+        securityProfile: page.securityProfile,
+        visibility: page.visibility,
+        allowedUsers: [...page.allowedUsers].sort(),
+        allowedGroups: [...page.allowedGroups].sort(),
+        encrypted: page.encrypted,
+        tags: [...page.tags],
+        content: page.content,
+        updatedAt: page.updatedAt,
+        updatedBy: page.updatedBy
+      }),
+      "utf8"
+    )
+    .digest("hex");
+
+const injectReplyMentionLinks = (markdown: string, mentionableUsernames: Set<string>): string => {
+  if (!markdown || mentionableUsernames.size < 1) return markdown;
+  return markdown.replace(COMMENT_REPLY_MENTION_REGEX, (full, prefix: string, usernameRaw: string) => {
+    const username = String(usernameRaw ?? "").trim().toLowerCase();
+    if (!mentionableUsernames.has(username)) return full;
+    return `${prefix}[@${username}](#reply-username-${username})`;
+  });
+};
 
 const normalizeUsernames = (values: string[]): string[] => {
   const seen = new Set<string>();
@@ -622,6 +670,8 @@ const renderEditorForm = (params: {
   encryptionAvailable: boolean;
   uiMode: UiMode;
   showSensitiveProfileOption: boolean;
+  lastKnownUpdatedAt?: string | undefined;
+  lastKnownConflictToken?: string | undefined;
 }): string => `
   <section class="content-wrap editor-shell" data-preview-endpoint="/api/markdown/preview" data-csrf="${escapeHtml(
     params.csrfToken
@@ -633,6 +683,8 @@ const renderEditorForm = (params: {
       <form method="post" action="${escapeHtml(params.action)}" class="stack large">
         <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
         <input type="hidden" name="securityProfile" value="${escapeHtml(params.securityProfile)}" data-security-profile-input />
+        ${params.lastKnownUpdatedAt ? `<input type="hidden" name="lastKnownUpdatedAt" value="${escapeHtml(params.lastKnownUpdatedAt)}" />` : ""}
+        ${params.lastKnownConflictToken ? `<input type="hidden" name="lastKnownConflictToken" value="${escapeHtml(params.lastKnownConflictToken)}" />` : ""}
         ${
           params.mode === "new"
             ? `
@@ -977,6 +1029,18 @@ const notifyWatchersForPageEvent = async (input: {
 
     if (result.ok && result.created) {
       created += 1;
+      // E-Mail-Benachrichtigung (fire-and-forget, kein SMTP = silent skip)
+      if (watcher.email) {
+        const actorDisplayName = input.actorUsername ?? "Jemand";
+        sendPageUpdateNotification({
+          toEmail: watcher.email,
+          toDisplayName: watcher.displayName,
+          pageTitle: input.title,
+          pageSlug: input.slug,
+          actorDisplayName,
+          eventType: input.event
+        }).catch(() => {/* Mail-Fehler nie nach oben propagieren */});
+      }
     }
   }
 
@@ -1014,6 +1078,17 @@ const notifyMentionedUsersForComment = async (input: {
 
     if (result.ok && result.created) {
       created += 1;
+      // E-Mail-Benachrichtigung bei Erwähnung (fire-and-forget)
+      if (user.email) {
+        sendMentionNotification({
+          toEmail: user.email,
+          toDisplayName: user.displayName,
+          pageTitle: input.page.title,
+          pageSlug: input.page.slug,
+          commentId: input.commentId,
+          actorDisplayName: input.actorDisplayName
+        }).catch(() => {/* Mail-Fehler nie nach oben propagieren */});
+      }
     }
   }
 
@@ -1233,6 +1308,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
   app.get("/wiki/:slug", { preHandler: [requireAuthOrPublicRead] }, async (request, reply) => {
     const params = request.params as { slug: string };
+    const query = asObject(request.query);
     let normalizedSlug = "";
     try {
       normalizedSlug = normalizeArticleSlug(params.slug);
@@ -1307,7 +1383,37 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     }
 
     const articleToc = renderArticleToc(page.slug, page.tableOfContents);
-    const backlinks = await listPageBacklinks(page.slug, request.currentUser);
+    const [backlinks, allPageComments, activeUsers] = await Promise.all([
+      listPageBacklinks(page.slug, request.currentUser),
+      listPageComments(page.slug),
+      request.currentUser ? listUsers() : Promise.resolve([])
+    ]);
+    const mentionableUsernames = new Set(
+      activeUsers
+        .filter((user) => !user.disabled)
+        .map((user) => user.username.toLowerCase())
+    );
+    const pageComments =
+      request.currentUser?.role === "admin"
+        ? allPageComments
+        : allPageComments.filter(
+            (comment) => comment.status === "approved" || (request.currentUser && comment.authorId === request.currentUser.id && comment.status === "pending")
+          );
+    const requestedCommentsPageRaw = Number.parseInt(readSingle(query.cp), 10);
+    const totalCommentPages = Math.max(1, Math.ceil(pageComments.length / COMMENT_PAGE_SIZE));
+    const currentCommentPage =
+      Number.isFinite(requestedCommentsPageRaw) && requestedCommentsPageRaw >= 1
+        ? Math.min(requestedCommentsPageRaw, totalCommentPages)
+        : totalCommentPages;
+    const commentsStart = (currentCommentPage - 1) * COMMENT_PAGE_SIZE;
+    const visibleComments = pageComments.slice(commentsStart, commentsStart + COMMENT_PAGE_SIZE);
+    const commentPageUrl = (targetPage: number): string => {
+      const target = Math.min(Math.max(targetPage, 1), totalCommentPages);
+      const params = new URLSearchParams();
+      if (target > 1) params.set("cp", String(target));
+      const queryString = params.toString();
+      return `/wiki/${encodeURIComponent(page.slug)}${queryString ? `?${queryString}` : ""}#comments`;
+    };
     const isWatching = request.currentUser
       ? await isUserWatchingPage({
           userId: request.currentUser.id,
@@ -1389,9 +1495,90 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                     .join("")}</ul>`
             }
           </section>
+          <section class="wiki-comments" id="comments">
+            <h2>Kommentare ${pageComments.length > 0 ? `<span class="muted-note">(${pageComments.length})</span>` : ""}</h2>
+            ${
+              pageComments.length < 1
+                ? '<p class="muted-note">Noch keine Kommentare.</p>'
+                : visibleComments
+                    .map(
+                      (comment) => {
+                        const canReplyMention = request.currentUser && mentionableUsernames.has(comment.authorUsername.toLowerCase());
+                        const authorMarkup = canReplyMention
+                          ? `<a href="#comments" class="comment-author comment-author-reply" data-comment-reply-mention="${escapeHtml(
+                              comment.authorUsername
+                            )}" title="@${escapeHtml(comment.authorUsername)} erwähnen">${escapeHtml(comment.authorDisplayName)}</a>`
+                          : `<span class="comment-author">${escapeHtml(comment.authorDisplayName)}</span>`;
+                        const commentMarkdown = request.currentUser
+                          ? injectReplyMentionLinks(comment.body, mentionableUsernames)
+                          : comment.body;
+                        return `
+                      <article class="comment-item" id="comment-${escapeHtml(comment.id)}">
+                        <header class="comment-header">
+                          ${authorMarkup}
+                          ${
+                            comment.status === "pending"
+                              ? '<span class="tag-chip">wartet auf Freigabe</span>'
+                              : comment.status === "rejected"
+                                ? '<span class="tag-chip">abgelehnt</span>'
+                                : ""
+                          }
+                          <time class="comment-date muted-note small" datetime="${escapeHtml(comment.createdAt)}">${escapeHtml(formatDate(comment.createdAt))}</time>
+                          ${
+                            request.currentUser && (request.currentUser.id === comment.authorId || request.currentUser.role === "admin")
+                              ? `<form method="post" action="/wiki/${encodeURIComponent(page.slug)}/comment/${encodeURIComponent(comment.id)}/delete" class="comment-delete-form" onsubmit="return confirm('Kommentar wirklich löschen?')">
+                                  <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                                  <button class="button danger tiny" type="submit">Löschen</button>
+                                </form>`
+                              : ""
+                          }
+                        </header>
+                        <div class="comment-body">${renderMarkdownPreview(commentMarkdown)}</div>
+                      </article>`;
+                      }
+                    )
+                    .join("")
+            }
+            ${
+              pageComments.length > COMMENT_PAGE_SIZE
+                ? `<div class="action-row">
+                    <span class="muted-note small">Seite ${currentCommentPage} von ${totalCommentPages}</span>
+                    ${
+                      currentCommentPage > 1
+                        ? `<a class="button secondary tiny" href="${commentPageUrl(currentCommentPage - 1)}">Neuere</a>`
+                        : ""
+                    }
+                    ${
+                      currentCommentPage < totalCommentPages
+                        ? `<a class="button secondary tiny" href="${commentPageUrl(currentCommentPage + 1)}">Ältere</a>`
+                        : ""
+                    }
+                  </div>`
+                : ""
+            }
+            ${
+              request.currentUser
+                ? `<form method="post" action="/wiki/${encodeURIComponent(page.slug)}/comment" class="comment-form stack">
+                    <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                    <label for="comment-body">Kommentar schreiben <span class="muted-note small">(Markdown, @username für Erwähnungen)</span></label>
+                    <div class="comment-mention-field">
+                      <textarea id="comment-body" name="body" rows="4" maxlength="4000" placeholder="Kommentar …" required class="comment-textarea"></textarea>
+                      <div class="comment-mention-suggest" hidden></div>
+                    </div>
+                    <div class="actions">
+                      <button type="submit" class="button primary">Kommentar posten</button>
+                    </div>
+                  </form>`
+                : '<p class="muted-note"><a href="/login">Anmelden</a>, um zu kommentieren.</p>'
+            }
+          </section>
         </div>
       </article>
     `;
+
+    const scripts: string[] = [];
+    if (articleToc) scripts.push("/article-toc.js?v=4");
+    if (request.currentUser) scripts.push("/comment-mention.js?v=6");
 
     return reply.type("text/html").send(
       renderLayout({
@@ -1400,9 +1587,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        notice: readSingle(asObject(request.query).notice),
-        error: readSingle(asObject(request.query).error),
-        scripts: articleToc ? ["/article-toc.js?v=4"] : undefined
+        notice: readSingle(query.notice),
+        error: readSingle(query.error),
+        scripts: scripts.length > 0 ? scripts : undefined
       })
     );
   });
@@ -1475,6 +1662,149 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
     return reply.redirect(`/wiki/${encodeURIComponent(targetSlug)}?notice=${encodeURIComponent(message)}`);
   });
+
+  // ─── Kommentare ──────────────────────────────────────────────────────────────
+
+  app.post(
+    "/wiki/:slug/comment",
+    { preHandler: [requireAuth, requireFormCsrfToken], config: { rateLimit: { max: 6, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+    const params = request.params as { slug: string };
+    const body = asObject(request.body);
+    let normalizedSlug = "";
+    try {
+      normalizedSlug = normalizeArticleSlug(params.slug);
+    } catch {
+      return reply.code(400).type("text/plain").send("Ungültiger Slug.");
+    }
+
+    const currentUser = request.currentUser;
+    if (!currentUser) {
+      return reply.redirect(`/login?error=${encodeURIComponent("Anmeldung erforderlich.")}`);
+    }
+
+    const page = await getPage(normalizedSlug);
+    if (!page) {
+      return reply.redirect(`/?error=${encodeURIComponent("Seite nicht gefunden.")}`);
+    }
+
+    if (!canUserAccessPage(page, currentUser)) {
+      return reply.redirect(`/?error=${encodeURIComponent("Kein Zugriff auf diesen Artikel.")}`);
+    }
+
+    const commentBody = readSingle(body.body).trim();
+    const commentModeration = await getCommentModerationSettings();
+    const currentUsername = currentUser.username.trim().toLowerCase();
+    const autoApproveBySettings =
+      commentModeration.moderationMode === "all_auto" ||
+      (commentModeration.moderationMode === "trusted_auto" &&
+        commentModeration.trustedAutoApproveUsernames.includes(currentUsername));
+    const result = await createPageComment({
+      slug: page.slug,
+      body: commentBody,
+      authorId: currentUser.id,
+      authorUsername: currentUser.username,
+      authorDisplayName: currentUser.displayName,
+      authorRole: currentUser.role,
+      autoApprove: currentUser.role === "admin" || autoApproveBySettings
+    });
+
+    if (!result.ok || !result.comment) {
+      return reply.redirect(
+        `/wiki/${encodeURIComponent(page.slug)}?error=${encodeURIComponent(result.error ?? "Kommentar konnte nicht gespeichert werden.")}`
+      );
+    }
+
+      await writeAuditLog({
+        action: "wiki_comment_created",
+        actorId: currentUser.id,
+        targetId: result.comment.id,
+        details: {
+          slug: page.slug,
+          status: result.comment.status
+        }
+      });
+
+      if (result.comment.status === "approved" && result.comment.mentions.length > 0) {
+      await notifyMentionedUsersForComment({
+        page,
+        commentId: result.comment.id,
+        mentionUsernames: result.comment.mentions,
+        actorId: currentUser.id,
+        actorDisplayName: currentUser.displayName
+      });
+      }
+
+      if (result.comment.status === "approved") {
+        await notifyWatchersForPageEvent({
+          slug: page.slug,
+          title: page.title,
+          page,
+          actorId: currentUser.id,
+          actorUsername: currentUser.displayName,
+          event: "comment",
+          eventTitle: `Neuer Kommentar: ${page.title}`,
+          eventBody: `${currentUser.displayName} hat einen Kommentar hinzugefügt.`,
+          url: `/wiki/${encodeURIComponent(page.slug)}#comment-${encodeURIComponent(result.comment.id)}`
+        });
+        return reply.redirect(`/wiki/${encodeURIComponent(page.slug)}#comment-${encodeURIComponent(result.comment.id)}`);
+      }
+
+      return reply.redirect(`/wiki/${encodeURIComponent(page.slug)}?notice=${encodeURIComponent("Kommentar gespeichert und wartet auf Freigabe.")}#comments`);
+    }
+  );
+
+  app.post(
+    "/wiki/:slug/comment/:commentId/delete",
+    { preHandler: [requireAuth, requireFormCsrfToken], config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const params = request.params as { slug: string; commentId: string };
+      let normalizedSlug = "";
+      try {
+        normalizedSlug = normalizeArticleSlug(params.slug);
+      } catch {
+        return reply.code(400).type("text/plain").send("Ungültiger Slug.");
+      }
+
+      const currentUser = request.currentUser;
+      if (!currentUser) {
+        return reply.redirect(`/login?error=${encodeURIComponent("Anmeldung erforderlich.")}`);
+      }
+
+      const page = await getPage(normalizedSlug);
+      if (!page) {
+        return reply.redirect(`/?error=${encodeURIComponent("Seite nicht gefunden.")}`);
+      }
+
+      if (!canUserAccessPage(page, currentUser)) {
+        return reply.redirect(`/?error=${encodeURIComponent("Kein Zugriff.")}`);
+      }
+
+      const result = await deletePageComment({
+        slug: page.slug,
+        commentId: params.commentId.trim(),
+        actorId: currentUser.id,
+        isAdmin: currentUser.role === "admin"
+      });
+
+      if (!result.ok) {
+        return reply.redirect(
+          `/wiki/${encodeURIComponent(page.slug)}?error=${encodeURIComponent(result.error ?? "Kommentar konnte nicht gelöscht werden.")}`
+        );
+      }
+
+      if (result.deleted) {
+        await writeAuditLog({
+          action: "wiki_comment_deleted",
+          actorId: currentUser.id,
+          targetId: params.commentId.trim(),
+          details: { slug: page.slug }
+        });
+      }
+
+      return reply.redirect(`/wiki/${encodeURIComponent(page.slug)}#comments`);
+    }
+  );
 
   app.get("/new", { preHandler: [requireAuth] }, async (request, reply) => {
     const query = asObject(request.query);
@@ -1790,7 +2120,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       encrypted: normalizedSettings.encrypted,
       encryptionAvailable: Boolean(config.contentEncryptionKey),
       uiMode,
-      showSensitiveProfileOption
+      showSensitiveProfileOption,
+      lastKnownUpdatedAt: page.updatedAt,
+      lastKnownConflictToken: buildEditConflictToken(page)
     });
 
     return reply.type("text/html").send(
@@ -1806,7 +2138,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     );
   });
 
-  app.post("/api/uploads", { preHandler: [requireAuth] }, async (request, reply) => {
+  app.post("/api/uploads", { preHandler: [requireAuth], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const csrfToken = request.headers["x-csrf-token"];
     const csrfValue = Array.isArray(csrfToken) ? csrfToken[0] ?? "" : csrfToken ?? "";
     const query = asObject(request.query);
@@ -1906,7 +2238,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     });
   });
 
-  app.post("/api/markdown/preview", { preHandler: [requireAuth] }, async (request, reply) => {
+  app.post("/api/markdown/preview", { preHandler: [requireAuth], config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
     const payload = request.body && typeof request.body === "object" ? (request.body as Record<string, unknown>) : {};
     const markdown = typeof payload.markdown === "string" ? payload.markdown : "";
 
@@ -1964,6 +2296,56 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
+
+    // Konflikterkennung: Prüfen ob die Seite seit dem Öffnen des Editors verändert wurde.
+    const lastKnownUpdatedAt = readSingle(body.lastKnownUpdatedAt).trim();
+    const lastKnownConflictToken = readSingle(body.lastKnownConflictToken).trim();
+    const currentConflictToken = buildEditConflictToken(existing);
+    const hasConflictByToken = lastKnownConflictToken.length > 0 && lastKnownConflictToken !== currentConflictToken;
+    const hasConflictByUpdatedAt = lastKnownUpdatedAt.length > 0 && lastKnownUpdatedAt !== existing.updatedAt;
+    if (hasConflictByToken || hasConflictByUpdatedAt) {
+      const [conflictCategories, conflictGroups, conflictUsers] = await Promise.all([
+        listCategories(),
+        listGroups(),
+        listUsers()
+      ]);
+      const conflictBody = renderEditorForm({
+        mode: "edit",
+        action: `/wiki/${encodeURIComponent(normalizedSlug)}/edit`,
+        slug: normalizedSlug,
+        slugAuto: false,
+        title,
+        tags: tagsRaw,
+        content,
+        csrfToken: request.csrfToken ?? "",
+        slugLocked: true,
+        categories: conflictCategories.map((c) => ({ id: c.id, name: c.name })),
+        selectedCategoryId: existing.categoryId,
+        securityProfile: existing.securityProfile,
+        visibility: existing.visibility,
+        allowedUsers: existing.allowedUsers,
+        allowedGroups: existing.allowedGroups,
+        availableUsers: conflictUsers.filter((u) => !u.disabled).map((u) => ({ username: u.username, displayName: u.displayName })),
+        availableGroups: conflictGroups.map((g) => ({ id: g.id, name: g.name, description: g.description })),
+        pageTemplates: [],
+        encrypted: existing.encrypted,
+        encryptionAvailable: Boolean(config.contentEncryptionKey),
+        uiMode,
+        showSensitiveProfileOption: uiMode === "advanced",
+        lastKnownUpdatedAt: existing.updatedAt,
+        lastKnownConflictToken: currentConflictToken
+      });
+      return reply.type("text/html").send(
+        renderLayout({
+          title: `Bearbeiten: ${existing.title}`,
+          body: conflictBody,
+          user: request.currentUser,
+          csrfToken: request.csrfToken,
+          error: `Konflikt: Diese Seite wurde zwischenzeitlich von „${escapeHtml(existing.updatedBy)}" am ${formatDate(existing.updatedAt)} geändert. Deine Änderungen sind unten erhalten – bitte prüfen und erneut speichern.`,
+          scripts: ["/wiki-ui.js?v=13"]
+        })
+      );
+    }
 
     const selectedCategoryId = readSingle(body.categoryId);
     const securityProfile = resolveSecurityProfileForUiMode({
@@ -2056,6 +2438,49 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       actorId: request.currentUser?.id,
       targetId: normalizedSlug
     });
+
+    await notifyWatchersForPageEvent({
+      slug: normalizedSlug,
+      title,
+      page: await getPage(normalizedSlug),
+      ...(request.currentUser?.id ? { actorId: request.currentUser.id } : {}),
+      ...(request.currentUser?.displayName ? { actorUsername: request.currentUser.displayName } : {}),
+      event: "page_update",
+      eventTitle: `Seite aktualisiert: ${title}`,
+      eventBody: `${request.currentUser?.displayName ?? "Jemand"} hat die Seite aktualisiert.`,
+      url: `/wiki/${encodeURIComponent(normalizedSlug)}`
+    });
+
+    if (existing.createdBy && existing.createdBy.toLowerCase() !== request.currentUser?.username?.toLowerCase()) {
+      const creator = await findUserByUsername(existing.createdBy);
+      if (creator && !creator.disabled) {
+        const creatorAccessUser = await buildAccessUser(creator);
+        const updatedPage = await getPage(normalizedSlug);
+        if (updatedPage && canUserAccessPage(updatedPage, creatorAccessUser)) {
+          await createNotification({
+            userId: creator.id,
+            type: "page_update",
+            title: `${request.currentUser?.displayName ?? "Jemand"} hat deinen Beitrag bearbeitet`,
+            body: title,
+            url: `/wiki/${encodeURIComponent(normalizedSlug)}`,
+            sourceSlug: normalizedSlug,
+            actorId: request.currentUser?.id ?? "",
+            dedupeKey: `page_update:${normalizedSlug}:${creator.id}:${Date.now()}`
+          });
+
+          if (creator.email) {
+            sendPageUpdateNotification({
+              toEmail: creator.email,
+              toDisplayName: creator.displayName,
+              pageTitle: title,
+              pageSlug: normalizedSlug,
+              actorDisplayName: request.currentUser?.displayName ?? "Jemand",
+              eventType: "page_update"
+            }).catch(() => {/* Mail-Fehler nie nach oben propagieren */});
+          }
+        }
+      }
+    }
 
     return reply.redirect(`/wiki/${encodeURIComponent(normalizedSlug)}`);
   });
@@ -2609,7 +3034,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     return reply.redirect(`/?notice=${encodeURIComponent(notice)}`);
   });
 
-  app.get("/search", { preHandler: [requireAuthOrPublicRead] }, async (request, reply) => {
+  app.get("/search", { preHandler: [requireAuthOrPublicRead], config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     const query = asObject(request.query);
     const q = readSingle(query.q).trim();
     const activeTag = normalizeTagFilter(readSingle(query.tag));
@@ -2620,8 +3045,14 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const pageNumber = parsePageNumber(readSingle(query.page));
     const categories = await listCategories();
 
+    // Query-Parser: Suchoperatoren (AND, OR, NOT, -, tag:) auflösen
+    const parsedQuery = q.length >= 2 ? parseSearchQuery(q) : null;
+    // Inline-Tags aus dem Query (tag:xxx) zusätzlich zu activeTag
+    const inlineTags = parsedQuery?.tags ?? [];
+    const allActiveTags = [...new Set([...(activeTag ? [activeTag] : []), ...inlineTags])];
+
     const hasTextSearch = q.length >= 2;
-    const hasTagFilter = activeTag.length > 0;
+    const hasTagFilter = allActiveTags.length > 0;
     const hasAuthorFilter = selectedAuthor.length > 0;
     const hasScopeFilter = selectedScope !== "all";
     const hasTimeframeFilter = ["24h", "7d", "30d", "365d"].includes(selectedTimeframe);
@@ -2629,14 +3060,19 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const hasAnyFilter = hasTagFilter || hasAuthorFilter || hasScopeFilter || hasTimeframeFilter || hasCategoryFilter;
 
     const rawResults = hasTextSearch
-      ? await searchPages(q, hasCategoryFilter ? { categoryId: selectedCategoryId } : undefined)
+      ? await searchPages(q, {
+          ...(hasCategoryFilter ? { categoryId: selectedCategoryId } : {}),
+          ...(parsedQuery ? { parsedQuery } : {})
+        })
       : hasAnyFilter
         ? await listPagesForUser(request.currentUser, hasCategoryFilter ? { categoryId: selectedCategoryId } : undefined)
         : [];
 
     const accessibleResults = hasTextSearch ? await filterAccessiblePageSummaries(rawResults, request.currentUser) : rawResults;
     let results = hasTagFilter
-      ? accessibleResults.filter((page) => page.tags.some((tag) => tag.toLowerCase() === activeTag))
+      ? accessibleResults.filter((page) =>
+          allActiveTags.every((tag) => page.tags.some((pageTag) => pageTag.toLowerCase() === tag))
+        )
       : accessibleResults;
 
     if (hasAuthorFilter) {
@@ -2827,7 +3263,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     );
   });
 
-  app.get("/api/search/suggest", { preHandler: [requireAuthOrPublicRead] }, async (request, reply) => {
+  app.get("/api/search/suggest", { preHandler: [requireAuthOrPublicRead], config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const query = asObject(request.query);
     const q = readSingle(query.q).trim();
     const requestedLimit = Number.parseInt(readSingle(query.limit) || "8", 10);
@@ -2853,6 +3289,31 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         updatedAt: page.updatedAt,
         url: `/wiki/${encodeURIComponent(page.slug)}`
       }))
+    });
+  });
+
+  app.get("/api/users/suggest", { preHandler: [requireAuth], config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const query = asObject(request.query);
+    const q = readSingle(query.q).trim().toLowerCase();
+    const requestedLimit = Number.parseInt(readSingle(query.limit) || "6", 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 20) : 6;
+
+    if (q.length < 2) {
+      return reply.send({ ok: true, users: [] });
+    }
+
+    const users = (await listUsers())
+      .filter((user) => !user.disabled)
+      .filter((user) => user.username.toLowerCase().startsWith(q) || user.displayName.toLowerCase().startsWith(q))
+      .slice(0, limit)
+      .map((user) => ({
+        username: user.username,
+        displayName: user.displayName
+      }));
+
+    return reply.send({
+      ok: true,
+      users
     });
   });
 };

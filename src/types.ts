@@ -5,6 +5,7 @@ export interface UserRecord {
   id: string;
   username: string;
   displayName: string;
+  email?: string | undefined;
   role: Role;
   passwordHash: string;
   createdAt: string;

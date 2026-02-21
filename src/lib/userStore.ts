@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import type { PublicUser, Role, Theme, UserRecord } from "../types.js";
 import { ensureFile, readJsonFile, writeJsonFile } from "./fileStore.js";
 import { hashPassword, needsRehash, verifyPassword } from "./password.js";
+import { canEncryptSecrets, decryptSecret, encryptSecret } from "./secretCrypto.js";
 
 const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
 
@@ -32,20 +33,55 @@ const normalizeUsername = (username: string): string => username.trim().toLowerC
 
 const VALID_THEMES: Theme[] = ["light", "dark", "system"];
 
+interface PersistedUserRecord extends UserRecord {
+  emailEnc?: string;
+}
+
 const loadUsers = async (): Promise<UserRecord[]> => {
   await ensureFile(config.usersFile, "[]\n");
-  const users = await readJsonFile<UserRecord[]>(config.usersFile, []);
+  const users = await readJsonFile<PersistedUserRecord[]>(config.usersFile, []);
   // Migration: add theme field to any record that lacks it (no save here — callers handle persistence)
+  const normalizedUsers: UserRecord[] = [];
   for (const user of users) {
-    if (!VALID_THEMES.includes(user.theme)) {
-      user.theme = "system";
-    }
+    const normalizedTheme = VALID_THEMES.includes(user.theme) ? user.theme : "system";
+    const encryptedEmail = typeof user.emailEnc === "string" ? decryptSecret(user.emailEnc) : null;
+    const rawEmail = typeof encryptedEmail === "string" ? encryptedEmail : user.email;
+    const normalizedEmail = normalizeEmail(rawEmail);
+
+    normalizedUsers.push({
+      ...user,
+      theme: normalizedTheme,
+      email: normalizedEmail || undefined
+    });
   }
-  return users;
+  return normalizedUsers;
 };
 
 const saveUsers = async (users: UserRecord[]): Promise<void> => {
-  await writeJsonFile(config.usersFile, users);
+  if (!canEncryptSecrets() && users.some((user) => Boolean(user.email))) {
+    console.warn("[user-store] CONTENT_ENCRYPTION_KEY fehlt oder ungültig. E-Mail-Adressen werden als Klartext gespeichert.");
+  }
+
+  const persistable: PersistedUserRecord[] = users.map((user) => {
+    const { email: _email, ...base } = user;
+    const normalizedEmail = normalizeEmail(user.email);
+    const encryptedEmail = normalizedEmail ? encryptSecret(normalizedEmail) : null;
+    if (encryptedEmail) {
+      return {
+        ...base,
+        emailEnc: encryptedEmail
+      };
+    }
+    if (normalizedEmail) {
+      return {
+        ...base,
+        email: normalizedEmail
+      };
+    }
+    return base;
+  });
+
+  await writeJsonFile(config.usersFile, persistable);
 };
 
 export const listUsers = async (): Promise<PublicUser[]> => {
@@ -56,6 +92,11 @@ export const listUsers = async (): Promise<PublicUser[]> => {
 export const hasAnyUser = async (): Promise<boolean> => {
   const users = await loadUsers();
   return users.length > 0;
+};
+
+export const migrateUserSecretStorage = async (): Promise<void> => {
+  const users = await loadUsers();
+  await saveUsers(users);
 };
 
 export const findUserById = async (id: string): Promise<PublicUser | null> => {
@@ -165,11 +206,21 @@ export const setupInitialAdmin = async (input: {
   });
 };
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+const normalizeEmail = (value: string | undefined): string => {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  if (!trimmed) return "";
+  if (trimmed.length > 254 || !EMAIL_PATTERN.test(trimmed)) return "";
+  return trimmed;
+};
+
 export interface UpdateUserInput {
   displayName: string;
   role: Role;
   disabled: boolean;
   theme?: Theme;
+  email?: string;
 }
 
 export const updateUser = async (userId: string, input: UpdateUserInput): Promise<{ user?: PublicUser; error?: string }> => {
@@ -189,6 +240,7 @@ export const updateUser = async (userId: string, input: UpdateUserInput): Promis
     target.role = input.role;
     target.disabled = input.disabled;
     if (input.theme !== undefined) target.theme = input.theme;
+    if (input.email !== undefined) target.email = normalizeEmail(input.email) || undefined;
     target.updatedAt = new Date().toISOString();
 
     await saveUsers(users);

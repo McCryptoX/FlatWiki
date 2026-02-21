@@ -48,7 +48,15 @@ const appendMissingEnvKeys = (filePath: string): InstallerResult => {
     ATTACHMENT_SCAN_MODE: "auto",
     ATTACHMENT_SCANNER_CMD: "clamscan",
     TRUST_PROXY: "false",
-    BOOTSTRAP_ADMIN_USERNAME: "admin"
+    BOOTSTRAP_ADMIN_USERNAME: "admin",
+    AUDIT_LOG_MAX_SIZE_MB: "10",
+    AUDIT_LOG_MAX_AGE_DAYS: "90",
+    SMTP_HOST: "",
+    SMTP_PORT: "587",
+    SMTP_SECURE: "false",
+    SMTP_USER: "",
+    SMTP_PASS: "",
+    SMTP_FROM: ""
   };
 
   const missingLines = Object.entries(defaults)
@@ -220,7 +228,15 @@ export const config = {
   attachmentsFileDir: path.join(rootDir, "data", "attachments", "files"),
   attachmentsQuarantineDir: path.join(rootDir, "data", "attachments", "quarantine"),
   attachmentsFile: path.join(rootDir, "data", "attachments", "attachments.json"),
-  auditFile: path.join(rootDir, "data", "audit.log")
+  auditFile: path.join(rootDir, "data", "audit.log"),
+  auditLogMaxSizeMb: parseNonNegativeInt(process.env.AUDIT_LOG_MAX_SIZE_MB, 10),
+  auditLogMaxAgeDays: parseNonNegativeInt(process.env.AUDIT_LOG_MAX_AGE_DAYS, 90),
+  smtpHost: (process.env.SMTP_HOST ?? "").trim(),
+  smtpPort: parsePositiveInt(process.env.SMTP_PORT, 587),
+  smtpSecure: parseBoolean(process.env.SMTP_SECURE, false),
+  smtpUser: (process.env.SMTP_USER ?? "").trim(),
+  smtpPass: process.env.SMTP_PASS ?? "",
+  smtpFrom: (process.env.SMTP_FROM ?? "").trim()
 };
 
 if (installerResult.created) {

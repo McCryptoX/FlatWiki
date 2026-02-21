@@ -1924,6 +1924,134 @@ th {
   overflow: auto;
 }
 
+/* ── Comment Mention Suggest ── */
+.comment-mention-field {
+  position: relative;
+}
+
+.comment-mention-suggest {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 20;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-alt) 92%, black 8%);
+  overflow: hidden;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.comment-mention-suggest button[data-mention-option] {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0.52rem 0.66rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  cursor: pointer;
+  font: inherit;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+}
+
+.comment-mention-suggest button[data-mention-option]:last-child {
+  border-bottom: none;
+}
+
+.comment-mention-suggest button[data-mention-option]:hover,
+.comment-mention-suggest button[data-mention-option].is-active {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.comment-mention-suggest .mention-user {
+  font-weight: 600;
+}
+
+.comment-mention-suggest .mention-name {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.comment-author-reply {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.comment-author-reply:hover,
+.comment-author-reply:focus-visible {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.comment-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.comment-item + .comment-item {
+  margin-top: 0.7rem;
+}
+
+.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.comment-author {
+  font-weight: 600;
+}
+
+.comment-date {
+  color: var(--muted);
+}
+
+.comment-delete-form {
+  margin-left: auto;
+}
+
+.comment-delete-form .button {
+  margin: 0;
+}
+
+/* Backward-compatible reset if an old cached script still renders list markup. */
+.comment-mention-suggest ul,
+.comment-mention-suggest li {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comment-mention-suggest li + li {
+  border-top: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+}
+
+.comment-mention-suggest li > a,
+.comment-mention-suggest li > button {
+  display: flex;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-decoration: none;
+  font: inherit;
+  text-align: left;
+  padding: 0.52rem 0.66rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
 .history-diff-table {
   width: 100%;
   border-collapse: collapse;

@@ -4,7 +4,7 @@ import { writeAuditLog } from "../lib/audit.js";
 import { listNotificationsForUser, markAllNotificationsRead, markNotificationRead } from "../lib/notificationStore.js";
 import { escapeHtml, formatDate, renderLayout } from "../lib/render.js";
 import { listWatchedSlugsByUser } from "../lib/watchStore.js";
-import { changeUserPassword } from "../lib/userStore.js";
+import { changeUserPassword, updateUser } from "../lib/userStore.js";
 import { validatePasswordStrength } from "../lib/password.js";
 import { deleteUserSessions } from "../lib/sessionStore.js";
 import { exportPagesCreatedByUser, listPagesCreatedByUser, listPagesForUser } from "../lib/wikiStore.js";
@@ -77,6 +77,10 @@ export const registerAccountRoutes = async (app: FastifyInstance): Promise<void>
             <p>${escapeHtml(user.displayName)}</p>
           </div>
           <div>
+            <strong>E-Mail</strong>
+            <p>${user.email ? escapeHtml(user.email) : '<span class="muted-note">Keine E-Mail hinterlegt</span>'}</p>
+          </div>
+          <div>
             <strong>Rolle</strong>
             <p>${escapeHtml(user.role)}</p>
           </div>
@@ -99,6 +103,17 @@ export const registerAccountRoutes = async (app: FastifyInstance): Promise<void>
             <input type="password" name="confirmPassword" required minlength="12" autocomplete="new-password" />
           </label>
           <button type="submit">Passwort aktualisieren</button>
+        </form>
+
+        <hr />
+        <h2>E-Mail-Adresse</h2>
+        <p class="muted-note">Wird für Benachrichtigungen per E-Mail genutzt. Optional.</p>
+        <form method="post" action="/account/email" class="stack">
+          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+          <label>E-Mail-Adresse
+            <input type="email" name="email" value="${escapeHtml(user.email ?? "")}" autocomplete="email" placeholder="du@example.com" />
+          </label>
+          <button type="submit">E-Mail aktualisieren</button>
         </form>
 
         <hr />
@@ -203,6 +218,29 @@ export const registerAccountRoutes = async (app: FastifyInstance): Promise<void>
     });
 
     return reply.redirect("/login?notice=Passwort+ge%C3%A4ndert.+Bitte+neu+anmelden.");
+  });
+
+  app.post("/account/email", { preHandler: [requireAuth] }, async (request, reply) => {
+    const user = request.currentUser;
+    if (!user) return reply.redirect("/login");
+
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const result = await updateUser(user.id, {
+      displayName: user.displayName,
+      role: user.role,
+      disabled: user.disabled,
+      email: body.email ?? ""
+    });
+
+    if (!result.user) {
+      return reply.redirect(`/account?error=${encodeURIComponent(result.error ?? "E-Mail konnte nicht gespeichert werden.")}`);
+    }
+
+    return reply.redirect("/account?notice=E-Mail+aktualisiert.");
   });
 
   app.get("/account/export", { preHandler: [requireAuth] }, async (request, reply) => {

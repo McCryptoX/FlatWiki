@@ -12,6 +12,7 @@ import {
   createGroup,
   deleteGroup,
   findGroupById,
+  listGroupIdsForUser,
   listGroups,
   removeUserFromAllGroups,
   setGroupMembers,
@@ -47,21 +48,39 @@ import {
   startBackupJob,
   startRestoreJob
 } from "../lib/backupStore.js";
+import { deleteCommentsForPage, deletePageComment, listAllComments, reviewPageComment, type PageComment } from "../lib/commentStore.js";
+import { createNotification } from "../lib/notificationStore.js";
 import { escapeHtml, formatDate, renderLayout } from "../lib/render.js";
 import {
   createUser,
   deleteUser,
   findUserById,
+  findUserByUsername,
   listUsers,
   setUserPasswordByAdmin,
   updateUser,
   validateUserInput
 } from "../lib/userStore.js";
 import { validatePasswordStrength } from "../lib/password.js";
-import { getRuntimeSettings, getUiMode, setIndexBackend, setPublicRead, setUiMode, type UiMode } from "../lib/runtimeSettingsStore.js";
+import { sendMail, sendMentionNotification, sendPageUpdateNotification } from "../lib/mailer.js";
+import {
+  getCommentModerationSettings,
+  getRuntimeSettings,
+  getSmtpSettings,
+  getUiMode,
+  setCommentModerationSettings,
+  setIndexBackend,
+  setPublicRead,
+  setSmtpSettings,
+  setUiMode,
+  type RuntimeSmtpSettings,
+  type UiMode
+} from "../lib/runtimeSettingsStore.js";
 import { deleteUserSessions } from "../lib/sessionStore.js";
 import { convertWikitextToMarkdown } from "../lib/wikitextImport.js";
-import { listBrokenInternalLinks, listPages, savePage, slugifyTitle } from "../lib/wikiStore.js";
+import { canUserAccessPage, getPage, listBrokenInternalLinks, listPages, savePage, slugifyTitle } from "../lib/wikiStore.js";
+import { listWatchersForPage } from "../lib/watchStore.js";
+import type { PublicUser } from "../types.js";
 
 const asRecord = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== "object") return {};
@@ -99,6 +118,44 @@ const readCheckbox = (value: unknown): boolean => {
   return normalized === "1" || normalized === "on" || normalized === "true" || normalized === "yes";
 };
 
+const parseTrustedUsernamesInput = (value: string): string[] => {
+  return value
+    .split(/[\s,;]+/g)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+};
+
+const parseCommentSelection = (values: string[]): Array<{ slug: string; commentId: string }> => {
+  const seen = new Set<string>();
+  const out: Array<{ slug: string; commentId: string }> = [];
+  for (const entry of values) {
+    const raw = String(entry ?? "").trim();
+    if (!raw) continue;
+    const splitIndex = raw.indexOf("::");
+    if (splitIndex < 1) continue;
+    const slug = raw.slice(0, splitIndex).trim().toLowerCase();
+    const commentId = raw.slice(splitIndex + 2).trim();
+    if (!slug || !commentId) continue;
+    const key = `${slug}::${commentId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ slug, commentId });
+  }
+  return out;
+};
+
+const buildCommentAdminQuery = (input: { status?: string; slug?: string; sort?: string }): string => {
+  const query = new URLSearchParams();
+  const status = (input.status ?? "").trim().toLowerCase();
+  const slug = (input.slug ?? "").trim().toLowerCase();
+  const sort = (input.sort ?? "").trim().toLowerCase();
+  if (status) query.set("status", status);
+  if (slug) query.set("slug", slug);
+  if (sort) query.set("sort", sort);
+  const output = query.toString();
+  return output ? `?${output}` : "";
+};
+
 const parseCsvTags = (raw: string): string[] =>
   raw
     .split(",")
@@ -112,6 +169,20 @@ const readUploadPartAsText = async (part: { file: AsyncIterable<Buffer> }): Prom
   }
 
   return Buffer.concat(chunks).toString("utf8");
+};
+
+const buildAccessUser = async (user: PublicUser): Promise<PublicUser> => {
+  if (user.role === "admin") {
+    return {
+      ...user,
+      groupIds: []
+    };
+  }
+  const groupIds = await listGroupIdsForUser(user.username);
+  return {
+    ...user,
+    groupIds
+  };
 };
 
 const renderUsersTable = (csrfToken: string, ownUserId: string, users: Awaited<ReturnType<typeof listUsers>>): string => {
@@ -1205,6 +1276,8 @@ const renderUiModeManagement = (
 export type AdminNavKey =
   | "users"
   | "ui"
+  | "mail"
+  | "comments"
   | "media"
   | "import"
   | "categories"
@@ -1220,6 +1293,8 @@ export type AdminNavKey =
 const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string; minMode?: UiMode }> = [
   { key: "users", href: "/admin/users", label: "Benutzerverwaltung" },
   { key: "ui", href: "/admin/ui", label: "Bedienmodus" },
+  { key: "mail", href: "/admin/mail", label: "E-Mail" },
+  { key: "comments", href: "/admin/comments", label: "Kommentare" },
   { key: "media", href: "/admin/media", label: "Bildverwaltung" },
   { key: "import", href: "/admin/import/wikitext", label: "Wikitext-Import", minMode: "advanced" },
   { key: "categories", href: "/admin/categories", label: "Kategorien" },
@@ -1359,6 +1434,702 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     }
     const notice = changedParts.length > 0 ? `Gespeichert (${changedParts.join(", ")}).` : "Einstellungen unverändert.";
     return reply.redirect(`/admin/ui?notice=${encodeURIComponent(notice)}`);
+  });
+
+  app.post("/admin/ui/smtp", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const current = await getSmtpSettings();
+    const shouldClearPass = body.smtpPassClear === "1";
+    const passRaw = body.smtpPass ?? "";
+    const nextPass = shouldClearPass ? "" : passRaw.trim().length > 0 ? passRaw : current.pass;
+
+    const result = await setSmtpSettings({
+      host: body.smtpHost ?? "",
+      port: body.smtpPort ?? "",
+      secure: body.smtpSecure ?? "0",
+      user: body.smtpUser ?? "",
+      pass: nextPass,
+      from: body.smtpFrom ?? "",
+      ...(request.currentUser?.username ? { updatedBy: request.currentUser.username } : {})
+    });
+
+    if (!result.ok) {
+      return reply.redirect(`/admin/ui?error=${encodeURIComponent(result.error ?? "SMTP-Einstellungen konnten nicht gespeichert werden.")}`);
+    }
+
+    await writeAuditLog({
+      action: "admin_smtp_settings_changed",
+      actorId: request.currentUser?.id,
+      details: {
+        host: result.smtp.host,
+        port: result.smtp.port,
+        secure: result.smtp.secure,
+        user: result.smtp.user,
+        from: result.smtp.from,
+        passwordSet: result.smtp.pass.length > 0
+      }
+    });
+
+    const notice = result.changed ? "SMTP-Einstellungen gespeichert." : "SMTP-Einstellungen unverändert.";
+    return reply.redirect(`/admin/ui?notice=${encodeURIComponent(notice)}`);
+  });
+
+  app.get("/admin/mail", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const smtp = await getSmtpSettings();
+
+    const body = `
+      ${renderAdminHeader({
+        title: "E-Mail",
+        description: "SMTP-Konfiguration für Benachrichtigungen.",
+        active: "mail"
+      })}
+      <section class="content-wrap stack">
+        <div class="admin-index-panel stack">
+          <h2>SMTP</h2>
+          <p class="muted-note">
+            Werte werden in <code>data/runtime-settings.json</code> gespeichert.
+          </p>
+          <form method="post" action="/admin/ui/smtp" class="stack">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>SMTP-Host
+              <input type="text" name="smtpHost" value="${escapeHtml(smtp.host)}" placeholder="smtp.example.com (leer = deaktiviert)" maxlength="255" />
+            </label>
+            <div class="action-row">
+              <label>Port
+                <input type="number" name="smtpPort" min="1" max="65535" value="${smtp.port}" />
+              </label>
+              <label>TLS direkt (Port 465)
+                <select name="smtpSecure">
+                  <option value="0" ${!smtp.secure ? "selected" : ""}>Nein (STARTTLS, z.B. 587)</option>
+                  <option value="1" ${smtp.secure ? "selected" : ""}>Ja</option>
+                </select>
+              </label>
+            </div>
+            <label>Benutzer (optional)
+              <input type="text" name="smtpUser" value="${escapeHtml(smtp.user)}" autocomplete="off" maxlength="254" />
+            </label>
+            <label>Passwort
+              <input type="password" name="smtpPass" value="" autocomplete="new-password" placeholder="Leer lassen = unverändert" />
+            </label>
+            <label class="checkline">
+              <input type="checkbox" name="smtpPassClear" value="1" />
+              <span>Gespeichertes SMTP-Passwort löschen</span>
+            </label>
+            <label>Absender
+              <input type="text" name="smtpFrom" value="${escapeHtml(smtp.from)}" placeholder="FlatWiki <wiki@example.com>" maxlength="260" />
+            </label>
+            <p class="muted-note small">
+              SMTP-Passwort gespeichert: <strong>${smtp.pass ? "ja" : "nein"}</strong>
+            </p>
+            <div class="action-row">
+              <button type="submit">SMTP speichern</button>
+            </div>
+          </form>
+        </div>
+        <div class="admin-index-panel stack">
+          <h2>Testmail senden</h2>
+          <p class="muted-note">Sendet eine einfache Testnachricht mit den aktuell gespeicherten SMTP-Einstellungen.</p>
+          <form method="post" action="/admin/mail/test" class="stack">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Empfänger
+              <input type="email" name="to" value="${escapeHtml(request.currentUser?.email ?? "")}" placeholder="du@example.com" required />
+            </label>
+            <div class="action-row">
+              <button type="submit">Testmail senden</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        canonicalPath: (request.url.split("?")[0] ?? "/"),
+        title: "E-Mail",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
+  app.post("/admin/mail/test", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const to = (body.to ?? "").trim();
+    if (!to.includes("@")) {
+      return reply.redirect("/admin/mail?error=Bitte+g%C3%BCltige+Empf%C3%A4nger-E-Mail+eintragen.");
+    }
+
+    const ok = await sendMail({
+      to,
+      subject: `[${config.wikiTitle}] SMTP-Test`,
+      text: `Dies ist eine SMTP-Testmail von ${config.wikiTitle}.\n\nZeit: ${new Date().toISOString()}`,
+      html: `<p>Dies ist eine SMTP-Testmail von <strong>${escapeHtml(config.wikiTitle)}</strong>.</p><p>Zeit: <code>${escapeHtml(
+        new Date().toISOString()
+      )}</code></p>`
+    });
+
+    await writeAuditLog({
+      action: "admin_mail_test_sent",
+      actorId: request.currentUser?.id,
+      details: {
+        to,
+        success: ok
+      }
+    });
+
+    if (!ok) {
+      return reply.redirect("/admin/mail?error=Testmail+konnte+nicht+gesendet+werden.+Bitte+SMTP-Konfiguration+pr%C3%BCfen.");
+    }
+    return reply.redirect(`/admin/mail?notice=${encodeURIComponent(`Testmail an ${to} gesendet.`)}`);
+  });
+
+  const notifyForApprovedComment = async (comment: PageComment): Promise<void> => {
+    const page = await getPage(comment.slug);
+    if (!page) return;
+
+    const activeUsers = (await listUsers()).filter((entry) => !entry.disabled);
+    const userById = new Map(activeUsers.map((entry) => [entry.id, entry] as const));
+
+    for (const username of comment.mentions) {
+      const mentioned = await findUserByUsername(username);
+      if (!mentioned || mentioned.disabled) continue;
+      if (mentioned.id === comment.authorId) continue;
+
+      const accessUser = await buildAccessUser(mentioned);
+      if (!canUserAccessPage(page, accessUser)) continue;
+
+      const mentionResult = await createNotification({
+        userId: mentioned.id,
+        type: "mention",
+        title: `${comment.authorDisplayName} hat dich erwähnt`,
+        body: `in ${page.title}`,
+        url: `/wiki/${encodeURIComponent(page.slug)}#comment-${encodeURIComponent(comment.id)}`,
+        sourceSlug: page.slug,
+        actorId: comment.authorId,
+        dedupeKey: `mention:${page.slug}:${comment.id}:${mentioned.id}`
+      });
+
+      if (mentionResult.ok && mentionResult.created && mentioned.email) {
+        sendMentionNotification({
+          toEmail: mentioned.email,
+          toDisplayName: mentioned.displayName,
+          pageTitle: page.title,
+          pageSlug: page.slug,
+          commentId: comment.id,
+          actorDisplayName: comment.authorDisplayName
+        }).catch(() => {/* Mail-Fehler nie nach oben propagieren */});
+      }
+    }
+
+    const watcherIds = await listWatchersForPage(page.slug);
+    for (const watcherId of watcherIds) {
+      if (watcherId === comment.authorId) continue;
+      const watcher = userById.get(watcherId);
+      if (!watcher) continue;
+      const accessUser = await buildAccessUser(watcher);
+      if (!canUserAccessPage(page, accessUser)) continue;
+
+      const watcherResult = await createNotification({
+        userId: watcher.id,
+        type: "comment",
+        title: `Neuer Kommentar: ${page.title}`,
+        body: `${comment.authorDisplayName} hat einen Kommentar hinzugefügt.`,
+        url: `/wiki/${encodeURIComponent(page.slug)}#comment-${encodeURIComponent(comment.id)}`,
+        sourceSlug: page.slug,
+        actorId: comment.authorId,
+        dedupeKey: `comment:${page.slug}:${comment.id}:${watcher.id}`
+      });
+
+      if (watcherResult.ok && watcherResult.created && watcher.email) {
+        sendPageUpdateNotification({
+          toEmail: watcher.email,
+          toDisplayName: watcher.displayName,
+          pageTitle: page.title,
+          pageSlug: page.slug,
+          actorDisplayName: comment.authorDisplayName,
+          eventType: "comment"
+        }).catch(() => {/* Mail-Fehler nie nach oben propagieren */});
+      }
+    }
+  };
+
+  app.get("/admin/comments", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const query = asRecord(request.query);
+    const selectedStatus = (query.status ?? "pending").trim().toLowerCase();
+    const selectedSlug = (query.slug ?? "").trim().toLowerCase();
+    const selectedSortRaw = (query.sort ?? "created_desc").trim().toLowerCase();
+    const selectedSort = selectedSortRaw === "created_asc" || selectedSortRaw === "status" ? selectedSortRaw : "created_desc";
+    const [comments, commentModeration, users] = await Promise.all([
+      listAllComments(),
+      getCommentModerationSettings(),
+      listUsers()
+    ]);
+    const pages = await listPages();
+    const titleBySlug = new Map(pages.map((page) => [page.slug, page.title] as const));
+    const slugCounts = new Map<string, number>();
+    for (const comment of comments) {
+      slugCounts.set(comment.slug, (slugCounts.get(comment.slug) ?? 0) + 1);
+    }
+
+    const filtered = comments.filter((comment) => {
+      const statusMatches = selectedStatus === "all" ? true : comment.status === selectedStatus;
+      const slugMatches = selectedSlug.length < 1 ? true : comment.slug === selectedSlug;
+      return statusMatches && slugMatches;
+    });
+    if (selectedSort === "created_asc") {
+      filtered.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    } else if (selectedSort === "status") {
+      const weight = (value: PageComment["status"]): number => (value === "pending" ? 0 : value === "rejected" ? 1 : 2);
+      filtered.sort((a, b) => weight(a.status) - weight(b.status) || Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    } else {
+      filtered.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    }
+
+    const statusOptions = [
+      { id: "pending", label: "Pending" },
+      { id: "approved", label: "Freigegeben" },
+      { id: "rejected", label: "Abgelehnt" },
+      { id: "all", label: "Alle" }
+    ];
+    const sortOptions = [
+      { id: "created_desc", label: "Neueste zuerst" },
+      { id: "created_asc", label: "Älteste zuerst" },
+      { id: "status", label: "Status (pending zuerst)" }
+    ];
+    const moderationModeLabel =
+      commentModeration.moderationMode === "all_auto"
+        ? "Alle automatisch"
+        : commentModeration.moderationMode === "trusted_auto"
+          ? "Trusted User automatisch"
+          : "Freigabe nötig";
+    const moderationModeHint =
+      commentModeration.moderationMode === "all_auto"
+        ? "Neue Kommentare werden sofort veröffentlicht."
+        : commentModeration.moderationMode === "trusted_auto"
+          ? `Auto-Freigabe nur für: ${commentModeration.trustedAutoApproveUsernames.length > 0 ? commentModeration.trustedAutoApproveUsernames.join(", ") : "keine User hinterlegt"}`
+          : "Neue Kommentare bleiben auf „pending“, bis ein Admin freigibt.";
+    const trustedUserDisplay = commentModeration.trustedAutoApproveUsernames.join(", ");
+    const knownActiveUsernames = users
+      .filter((user) => !user.disabled)
+      .map((user) => user.username)
+      .sort((a, b) => a.localeCompare(b, "de"))
+      .slice(0, 30)
+      .join(", ");
+    const slugOptions = Array.from(slugCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], "de"))
+      .map(([slug, count]) => `<option value="${escapeHtml(slug)}" ${selectedSlug === slug ? "selected" : ""}>${escapeHtml(slug)} (${count})</option>`)
+      .join("");
+
+    const body = `
+      ${renderAdminHeader({
+        title: "Kommentare",
+        description: "Moderation, Freigabe und Aufräumen von Kommentaren.",
+        active: "comments"
+      })}
+      <section class="content-wrap stack large">
+        <div class="admin-index-panel stack">
+          <h2>Moderationseinstellungen</h2>
+          <p class="muted-note">Steuert, wann neue Kommentare sofort sichtbar sind und wann eine Freigabe nötig ist.</p>
+          <form method="post" action="/admin/comments/settings" class="stack">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Modus
+              <select name="moderationMode">
+                <option value="moderated" ${commentModeration.moderationMode === "moderated" ? "selected" : ""}>Freigabe nötig (Standard)</option>
+                <option value="trusted_auto" ${commentModeration.moderationMode === "trusted_auto" ? "selected" : ""}>Nur bestimmte User automatisch freigeben</option>
+                <option value="all_auto" ${commentModeration.moderationMode === "all_auto" ? "selected" : ""}>Alle automatisch freigeben</option>
+              </select>
+            </label>
+            <label>Trusted User (nur für „bestimmte User automatisch freigeben“)
+              <textarea name="trustedUsernames" rows="3" placeholder="z.B. admin, roman">${escapeHtml(trustedUserDisplay)}</textarea>
+            </label>
+            <p class="muted-note small">Eingabe mit Komma, Leerzeichen oder Zeilenumbruch trennen. Beispiel-User: ${escapeHtml(knownActiveUsernames || "-")}.</p>
+            <div class="action-row">
+              <button type="submit">Moderation speichern</button>
+            </div>
+          </form>
+        </div>
+        <div class="admin-index-panel">
+          <h2>Aktiver Modus <span class="tag-chip">${escapeHtml(moderationModeLabel)}</span></h2>
+          <p class="muted-note">${escapeHtml(moderationModeHint)}</p>
+        </div>
+        <div class="admin-index-panel">
+          <form method="get" action="/admin/comments" class="action-row">
+            <label>Status
+              <select name="status">
+                ${statusOptions
+                  .map((option) => `<option value="${option.id}" ${selectedStatus === option.id ? "selected" : ""}>${option.label}</option>`)
+                  .join("")}
+              </select>
+            </label>
+            <label>Seite
+              <select name="slug">
+                <option value="">Alle Seiten</option>
+                ${slugOptions}
+              </select>
+            </label>
+            <label>Sortierung
+              <select name="sort">
+                ${sortOptions.map((option) => `<option value="${option.id}" ${selectedSort === option.id ? "selected" : ""}>${option.label}</option>`).join("")}
+              </select>
+            </label>
+            <button type="submit" class="secondary">Filtern</button>
+          </form>
+        </div>
+        <div class="admin-index-panel">
+          ${
+            filtered.length < 1
+              ? '<p class="empty">Keine Kommentare für den aktuellen Filter gefunden.</p>'
+              : `
+                <form id="comment-bulk-form" method="post" action="/admin/comments/review-bulk" class="stack">
+                  <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                  <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
+                  <input type="hidden" name="slug" value="${escapeHtml(selectedSlug)}" />
+                  <input type="hidden" name="sort" value="${escapeHtml(selectedSort)}" />
+                  <div class="action-row">
+                    <button type="submit" name="decision" value="approve" class="secondary tiny" onclick="return confirm('Ausgewählte Kommentare wirklich freigeben?')">Auswahl freigeben</button>
+                    <button type="submit" name="decision" value="reject" class="secondary tiny" onclick="return confirm('Ausgewählte Kommentare wirklich ablehnen?')">Auswahl ablehnen</button>
+                    <button type="submit" formaction="/admin/comments/delete-bulk" class="danger tiny" onclick="return confirm('Ausgewählte Kommentare wirklich löschen?')">Auswahl löschen</button>
+                  </div>
+                </form>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Auswahl</th>
+                        <th>Status</th>
+                        <th>Seite</th>
+                        <th>Autor</th>
+                        <th>Text</th>
+                        <th>Erstellt</th>
+                        <th>Aktionen</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${filtered
+                        .map((comment) => {
+                          const statusLabel =
+                            comment.status === "approved" ? "Freigegeben" : comment.status === "rejected" ? "Abgelehnt" : "Pending";
+                          const excerpt = comment.body.length > 180 ? `${comment.body.slice(0, 180)}…` : comment.body;
+                          return `
+                            <tr>
+                              <td>
+                                <label class="checkline">
+                                  <input type="checkbox" name="items" value="${escapeHtml(`${comment.slug}::${comment.id}`)}" form="comment-bulk-form" />
+                                  <span class="sr-only">Kommentar auswählen</span>
+                                </label>
+                              </td>
+                              <td>${escapeHtml(statusLabel)}</td>
+                              <td><a href="/wiki/${encodeURIComponent(comment.slug)}#comment-${encodeURIComponent(comment.id)}">${escapeHtml(
+                                titleBySlug.get(comment.slug) ?? comment.slug
+                              )}</a></td>
+                              <td>${escapeHtml(comment.authorDisplayName)} (${escapeHtml(comment.authorUsername)})</td>
+                              <td>${escapeHtml(excerpt)}</td>
+                              <td>${escapeHtml(formatDate(comment.createdAt))}</td>
+                              <td>
+                                <div class="action-row">
+                                  <form method="post" action="/admin/comments/review">
+                                    <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                                    <input type="hidden" name="slug" value="${escapeHtml(comment.slug)}" />
+                                    <input type="hidden" name="commentId" value="${escapeHtml(comment.id)}" />
+                                    <input type="hidden" name="decision" value="approve" />
+                                    <input type="hidden" name="filterStatus" value="${escapeHtml(selectedStatus)}" />
+                                    <input type="hidden" name="filterSlug" value="${escapeHtml(selectedSlug)}" />
+                                    <input type="hidden" name="filterSort" value="${escapeHtml(selectedSort)}" />
+                                    <button type="submit" class="tiny secondary">Freigeben</button>
+                                  </form>
+                                  <form method="post" action="/admin/comments/review">
+                                    <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                                    <input type="hidden" name="slug" value="${escapeHtml(comment.slug)}" />
+                                    <input type="hidden" name="commentId" value="${escapeHtml(comment.id)}" />
+                                    <input type="hidden" name="decision" value="reject" />
+                                    <input type="hidden" name="filterStatus" value="${escapeHtml(selectedStatus)}" />
+                                    <input type="hidden" name="filterSlug" value="${escapeHtml(selectedSlug)}" />
+                                    <input type="hidden" name="filterSort" value="${escapeHtml(selectedSort)}" />
+                                    <button type="submit" class="tiny secondary">Ablehnen</button>
+                                  </form>
+                                  <form method="post" action="/admin/comments/delete" onsubmit="return confirm('Kommentar wirklich löschen?')">
+                                    <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+                                    <input type="hidden" name="slug" value="${escapeHtml(comment.slug)}" />
+                                    <input type="hidden" name="commentId" value="${escapeHtml(comment.id)}" />
+                                    <input type="hidden" name="filterStatus" value="${escapeHtml(selectedStatus)}" />
+                                    <input type="hidden" name="filterSlug" value="${escapeHtml(selectedSlug)}" />
+                                    <input type="hidden" name="filterSort" value="${escapeHtml(selectedSort)}" />
+                                    <button type="submit" class="tiny danger">Löschen</button>
+                                  </form>
+                                </div>
+                              </td>
+                            </tr>
+                          `;
+                        })
+                        .join("")}
+                    </tbody>
+                  </table>
+                </div>
+              `
+          }
+        </div>
+        <div class="admin-index-panel">
+          <h2>Alle Kommentare einer Seite löschen</h2>
+          <form method="post" action="/admin/comments/delete-page" class="action-row" onsubmit="return confirm('Alle Kommentare der gewählten Seite wirklich löschen?')">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <input type="hidden" name="filterStatus" value="${escapeHtml(selectedStatus)}" />
+            <input type="hidden" name="filterSlug" value="${escapeHtml(selectedSlug)}" />
+            <input type="hidden" name="filterSort" value="${escapeHtml(selectedSort)}" />
+            <select name="slug" required>
+              <option value="">Seite wählen</option>
+              ${slugOptions}
+            </select>
+            <button type="submit" class="danger">Alle löschen</button>
+          </form>
+        </div>
+      </section>
+    `;
+
+    return reply.type("text/html").send(
+      renderLayout({
+        canonicalPath: (request.url.split("?")[0] ?? "/"),
+        title: "Kommentare",
+        body,
+        user: request.currentUser,
+        csrfToken: request.csrfToken,
+        notice: query.notice,
+        error: query.error
+      })
+    );
+  });
+
+  app.post("/admin/comments/settings", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const moderationMode = (body.moderationMode ?? "").trim();
+    const trustedUsernames = parseTrustedUsernamesInput(body.trustedUsernames ?? "");
+    const result = await setCommentModerationSettings({
+      moderationMode,
+      trustedAutoApproveUsernames: trustedUsernames,
+      ...(request.currentUser?.username ? { updatedBy: request.currentUser.username } : {})
+    });
+    if (!result.ok) {
+      return reply.redirect(`/admin/comments?error=${encodeURIComponent(result.error ?? "Moderation konnte nicht gespeichert werden.")}`);
+    }
+
+    await writeAuditLog({
+      action: "admin_comment_moderation_settings_changed",
+      actorId: request.currentUser?.id,
+      details: {
+        moderationMode: result.comments.moderationMode,
+        trustedCount: result.comments.trustedAutoApproveUsernames.length
+      }
+    });
+
+    return reply.redirect(
+      `/admin/comments?notice=${encodeURIComponent(
+        result.changed ? "Moderationseinstellungen gespeichert." : "Moderationseinstellungen unverändert."
+      )}`
+    );
+  });
+
+  app.post("/admin/comments/review", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const redirectQuery = buildCommentAdminQuery({
+      status: body.filterStatus ?? "pending",
+      slug: body.filterSlug ?? "",
+      sort: body.filterSort ?? "created_desc"
+    });
+    const slug = (body.slug ?? "").trim();
+    const commentId = (body.commentId ?? "").trim();
+    const approve = (body.decision ?? "").trim().toLowerCase() === "approve";
+    const result = await reviewPageComment({
+      slug,
+      commentId,
+      reviewerId: request.currentUser?.id ?? "",
+      approve
+    });
+    if (!result.ok) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=${encodeURIComponent(result.error ?? "Kommentar konnte nicht moderiert werden.")}`);
+    }
+
+    await writeAuditLog({
+      action: approve ? "admin_comment_approved" : "admin_comment_rejected",
+      actorId: request.currentUser?.id,
+      targetId: commentId,
+      details: { slug }
+    });
+
+    if (approve && result.updated && result.previousStatus !== "approved") {
+      await notifyForApprovedComment(result.updated);
+    }
+
+    return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}notice=${encodeURIComponent(approve ? "Kommentar freigegeben." : "Kommentar abgelehnt.")}`);
+  });
+
+  app.post("/admin/comments/review-bulk", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    const payload = asObject(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const redirectQuery = buildCommentAdminQuery({
+      status: body.status ?? "pending",
+      slug: body.slug ?? "",
+      sort: body.sort ?? "created_desc"
+    });
+    const approve = (body.decision ?? "").trim().toLowerCase() === "approve";
+    const items = parseCommentSelection(readMany(payload.items));
+    if (items.length < 1) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=Bitte+mindestens+einen+Kommentar+ausw%C3%A4hlen.`);
+    }
+
+    let updatedCount = 0;
+    let notifyCount = 0;
+    for (const item of items) {
+      const result = await reviewPageComment({
+        slug: item.slug,
+        commentId: item.commentId,
+        reviewerId: request.currentUser?.id ?? "",
+        approve
+      });
+      if (!result.ok || !result.updated) continue;
+      updatedCount += 1;
+      if (approve && result.previousStatus !== "approved") {
+        await notifyForApprovedComment(result.updated);
+        notifyCount += 1;
+      }
+      await writeAuditLog({
+        action: approve ? "admin_comment_approved" : "admin_comment_rejected",
+        actorId: request.currentUser?.id,
+        targetId: item.commentId,
+        details: { slug: item.slug, bulk: true }
+      });
+    }
+
+    if (updatedCount < 1) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=Keine+ausgew%C3%A4hlten+Kommentare+konnten+aktualisiert+werden.`);
+    }
+
+    const summary = approve
+      ? `${updatedCount} Kommentar(e) freigegeben${notifyCount > 0 ? `, ${notifyCount} Benachrichtigungsrunde(n) ausgelöst` : ""}.`
+      : `${updatedCount} Kommentar(e) abgelehnt.`;
+    return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}notice=${encodeURIComponent(summary)}`);
+  });
+
+  app.post("/admin/comments/delete-bulk", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    const payload = asObject(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+
+    const redirectQuery = buildCommentAdminQuery({
+      status: body.status ?? "pending",
+      slug: body.slug ?? "",
+      sort: body.sort ?? "created_desc"
+    });
+    const items = parseCommentSelection(readMany(payload.items));
+    if (items.length < 1) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=Bitte+mindestens+einen+Kommentar+ausw%C3%A4hlen.`);
+    }
+
+    let deletedCount = 0;
+    for (const item of items) {
+      const result = await deletePageComment({
+        slug: item.slug,
+        commentId: item.commentId,
+        actorId: request.currentUser?.id ?? "",
+        isAdmin: true
+      });
+      if (!result.ok || !result.deleted) continue;
+      deletedCount += 1;
+      await writeAuditLog({
+        action: "admin_comment_deleted",
+        actorId: request.currentUser?.id,
+        targetId: item.commentId,
+        details: { slug: item.slug, bulk: true }
+      });
+    }
+
+    if (deletedCount < 1) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=Keine+ausgew%C3%A4hlten+Kommentare+konnten+gel%C3%B6scht+werden.`);
+    }
+
+    return reply.redirect(
+      `/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}notice=${encodeURIComponent(`${deletedCount} Kommentar(e) gelöscht.`)}`
+    );
+  });
+
+  app.post("/admin/comments/delete", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+    const redirectQuery = buildCommentAdminQuery({
+      status: body.filterStatus ?? "pending",
+      slug: body.filterSlug ?? "",
+      sort: body.filterSort ?? "created_desc"
+    });
+    const slug = (body.slug ?? "").trim();
+    const commentId = (body.commentId ?? "").trim();
+    const result = await deletePageComment({
+      slug,
+      commentId,
+      actorId: request.currentUser?.id ?? "",
+      isAdmin: true
+    });
+    if (!result.ok) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=${encodeURIComponent(result.error ?? "Kommentar konnte nicht gelöscht werden.")}`);
+    }
+
+    await writeAuditLog({
+      action: "admin_comment_deleted",
+      actorId: request.currentUser?.id,
+      targetId: commentId,
+      details: { slug }
+    });
+    return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}notice=Kommentar+gel%C3%B6scht.`);
+  });
+
+  app.post("/admin/comments/delete-page", { preHandler: [requireAdmin] }, async (request, reply) => {
+    const body = asRecord(request.body);
+    if (!verifySessionCsrfToken(request, body._csrf ?? "")) {
+      return reply.code(400).type("text/plain").send("Ungültiges CSRF-Token");
+    }
+    const redirectQuery = buildCommentAdminQuery({
+      status: body.filterStatus ?? "pending",
+      slug: body.filterSlug ?? "",
+      sort: body.filterSort ?? "created_desc"
+    });
+    const slug = (body.slug ?? "").trim();
+    if (!slug) {
+      return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}error=Bitte+eine+Seite+ausw%C3%A4hlen.`);
+    }
+
+    const removed = await deleteCommentsForPage(slug);
+    await writeAuditLog({
+      action: "admin_comments_deleted_for_page",
+      actorId: request.currentUser?.id,
+      targetId: slug,
+      details: { removed }
+    });
+    return reply.redirect(`/admin/comments${redirectQuery}${redirectQuery ? "&" : "?"}notice=${encodeURIComponent(`${removed} Kommentar(e) gelöscht.`)}`);
   });
 
   app.get("/admin/media", { preHandler: [requireAdmin] }, async (request, reply) => {
@@ -2784,6 +3555,9 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           <label>Anzeigename
             <input type="text" name="displayName" value="${escapeHtml(query.displayName ?? user.displayName)}" required />
           </label>
+          <label>E-Mail-Adresse <span class="muted-note small">(optional, für Benachrichtigungen)</span>
+            <input type="email" name="email" value="${escapeHtml(query.email ?? user.email ?? "")}" autocomplete="email" />
+          </label>
           <label>Rolle
             <select name="role">${roleOptions((query.role as "admin" | "user") ?? user.role)}</select>
           </label>
@@ -2833,6 +3607,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const role = body.role === "admin" ? "admin" : "user";
     const disabled = body.disabled === "1";
     const displayName = body.displayName ?? "";
+    const email = typeof body.email === "string" ? body.email : undefined;
     const themeRaw = body.theme;
     const theme = (typeof themeRaw === "string" && VALID_THEMES.has(themeRaw) ? themeRaw : undefined) as import("../types.js").Theme | undefined;
 
@@ -2862,6 +3637,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       displayName,
       role,
       disabled,
+      ...(email !== undefined ? { email } : {}),
       ...(theme !== undefined ? { theme } : {})
     });
 

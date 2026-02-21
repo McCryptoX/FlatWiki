@@ -14,6 +14,7 @@ import { listGroupIdsForUser } from "./groupStore.js";
 import { createPageVersionSnapshot, getPageVersion, listPageVersions, type PageVersionSummary } from "./pageVersionStore.js";
 import { getIndexBackend } from "./runtimeSettingsStore.js";
 import { readSqliteIndexEntries } from "./sqliteIndexStore.js";
+import { applyQueryFilter, getPrimarySearchTerm, type ParsedQuery } from "./searchQuery.js";
 
 marked.use({
   gfm: true,
@@ -1499,44 +1500,53 @@ export const deletePage = async (
   return { ok: true, deleted: true };
 };
 
-export const searchPages = async (query: string, options?: { categoryId?: string }): Promise<WikiPageSummary[]> => {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
+export const searchPages = async (
+  query: string,
+  options?: { categoryId?: string; parsedQuery?: ParsedQuery }
+): Promise<WikiPageSummary[]> => {
+  const parsed = options?.parsedQuery;
+  // Primärterm für Index-Lookup: entweder erster required-Term oder der rohe Query
+  const primaryTerm = parsed ? (getPrimarySearchTerm(parsed) || query.trim().toLowerCase()) : query.trim().toLowerCase();
+  const normalizedQuery = primaryTerm.toLowerCase();
+  if (!normalizedQuery && !parsed?.optional.length && !parsed?.tags.length) {
     return [];
   }
 
-  const persistedIndex = suggestionIndexDirty ? [] : await loadPersistedSuggestionIndex(options);
+  const indexOptions = options?.categoryId ? { categoryId: options.categoryId } : undefined;
+  const persistedIndex = suggestionIndexDirty ? [] : await loadPersistedSuggestionIndex(indexOptions);
   if (persistedIndex.length > 0) {
     return persistedIndex
       .map((entry) => {
         let score = 0;
-        if (entry.titleLower.startsWith(normalizedQuery)) {
-          score += 12;
-        } else if (entry.titleLower.includes(normalizedQuery)) {
-          score += 8;
+        if (normalizedQuery) {
+          if (entry.titleLower.startsWith(normalizedQuery)) {
+            score += 12;
+          } else if (entry.titleLower.includes(normalizedQuery)) {
+            score += 8;
+          }
+
+          if (entry.tagsLower.some((tag) => tag.startsWith(normalizedQuery))) {
+            score += 5;
+          } else if (entry.tagsLower.some((tag) => tag.includes(normalizedQuery))) {
+            score += 3;
+          }
+
+          if (entry.searchableText.includes(normalizedQuery)) {
+            score += 2;
+          }
+        } else {
+          score = 1; // Kein Primärterm, aber Operator-Filter aktiv
         }
 
-        if (entry.tagsLower.some((tag) => tag.startsWith(normalizedQuery))) {
-          score += 5;
-        } else if (entry.tagsLower.some((tag) => tag.includes(normalizedQuery))) {
-          score += 3;
-        }
-
-        if (entry.searchableText.includes(normalizedQuery)) {
-          score += 2;
-        }
-
-        return {
-          score,
-          page: entry.summary
-        };
+        const finalScore = parsed ? applyQueryFilter(entry.searchableText, entry.tagsLower, parsed, score) : score;
+        return { score: finalScore, page: entry.summary };
       })
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score || new Date(b.page.updatedAt).getTime() - new Date(a.page.updatedAt).getTime())
       .map((entry) => entry.page);
   }
 
-  const pages = await listPages(options);
+  const pages = await listPages(indexOptions);
 
   const pageDetails = await Promise.all(
     pages.map(async (page) => {
@@ -1553,10 +1563,13 @@ export const searchPages = async (query: string, options?: { categoryId?: string
           ? ""
           : entry.full.content;
       const haystack = `${entry.summary.title}\n${entry.summary.excerpt}\n${searchableContent}\n${entry.summary.tags.join(" ")}`.toLowerCase();
-      const score = haystack.includes(normalizedQuery)
+      let score = normalizedQuery && haystack.includes(normalizedQuery)
         ? (entry.summary.title.toLowerCase().includes(normalizedQuery) ? 4 : 2) +
           (entry.summary.tags.some((tag) => tag.includes(normalizedQuery)) ? 2 : 0)
-        : 0;
+        : (parsed && (parsed.optional.length > 0 || parsed.tags.length > 0) ? 1 : 0);
+      if (parsed) {
+        score = applyQueryFilter(haystack, entry.summary.tags.map((t) => t.toLowerCase()), parsed, score);
+      }
       return { score, page: entry.summary };
     })
     .filter((entry) => entry.score > 0)

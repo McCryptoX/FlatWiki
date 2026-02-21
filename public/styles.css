@@ -1869,6 +1869,150 @@ th {
   gap: 0.35rem;
 }
 
+/* ── Kommentare ── */
+.wiki-comments {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.wiki-comments h2 {
+  margin: 0 0 1rem;
+}
+
+.comment-item {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.comment-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.comment-author {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.comment-date {
+  margin-left: auto;
+}
+
+.comment-delete-form {
+  margin-left: 0.5rem;
+}
+
+.comment-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.comment-body > :first-child {
+  margin-top: 0;
+}
+
+.comment-body > :last-child {
+  margin-bottom: 0;
+}
+
+.comment-form {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.comment-textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.comment-textarea:focus {
+  outline: 2px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.comment-mention-field {
+  position: relative;
+}
+
+.comment-mention-suggest {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 20;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-alt) 92%, black 8%);
+  overflow: hidden;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.comment-mention-suggest button[data-mention-option] {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0.52rem 0.66rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  cursor: pointer;
+  font: inherit;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+}
+
+.comment-mention-suggest button[data-mention-option]:last-child {
+  border-bottom: none;
+}
+
+.comment-mention-suggest button[data-mention-option]:hover,
+.comment-mention-suggest button[data-mention-option].is-active {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.comment-mention-suggest .mention-user {
+  font-weight: 600;
+}
+
+.comment-mention-suggest .mention-name {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 /* ── Code Blocks ── */
 .wiki-content pre {
   background: var(--code-bg);

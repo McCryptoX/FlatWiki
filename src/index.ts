@@ -7,7 +7,7 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { config } from "./config.js";
-import { attachCurrentUser } from "./lib/auth.js";
+import { attachCurrentUser, requireAuthOrPublicRead } from "./lib/auth.js";
 import { themeInitCspHash, themeCssCspHash } from "./lib/render.js";
 import { ensureDefaultCategory } from "./lib/categoryStore.js";
 import { initBackupAutomation } from "./lib/backupStore.js";
@@ -16,7 +16,7 @@ import { ensureDefaultTemplates } from "./lib/templateStore.js";
 import { initRuntimeSettings } from "./lib/runtimeSettingsStore.js";
 import { ensureSearchIndexConsistency } from "./lib/searchIndexStore.js";
 import { purgeExpiredSessions } from "./lib/sessionStore.js";
-import { ensureInitialAdmin } from "./lib/userStore.js";
+import { ensureInitialAdmin, migrateUserSecretStorage } from "./lib/userStore.js";
 import { registerAccountRoutes } from "./routes/accountRoutes.js";
 import { registerAdminRoutes } from "./routes/adminRoutes.js";
 import { registerAuthRoutes } from "./routes/authRoutes.js";
@@ -98,6 +98,16 @@ const registerPlugins = async (): Promise<void> => {
     timeWindow: "1 minute"
   });
 
+  app.addHook("preHandler", attachCurrentUser);
+
+  // Auth-Check für /uploads/: nur für eingeloggte Nutzer oder bei aktiviertem
+  // public-read-Modus zugänglich – konsistent mit dem restlichen Auth-Verhalten.
+  app.addHook("preHandler", async (request, reply) => {
+    if (request.url.startsWith("/uploads/")) {
+      await requireAuthOrPublicRead(request, reply);
+    }
+  });
+
   await app.register(fastifyStatic, {
     root: path.join(config.rootDir, "public"),
     prefix: "/",
@@ -130,6 +140,7 @@ const start = async (): Promise<void> => {
   try {
     await bootstrapDataStorage();
     await initRuntimeSettings();
+    await migrateUserSecretStorage();
     await ensureDefaultCategory();
     await ensureDefaultTemplates();
     initBackupAutomation({
@@ -143,8 +154,6 @@ const start = async (): Promise<void> => {
       app.log.info({ reason: indexCheck.reason }, "Suchindex-Konsistenz beim Start geprüft.");
     }
     await registerPlugins();
-
-    app.addHook("preHandler", attachCurrentUser);
 
     const adminResult = await ensureInitialAdmin();
     if (adminResult.created) {
