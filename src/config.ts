@@ -16,6 +16,7 @@ export type IndexBackend = "flat" | "sqlite";
 export type AttachmentScanMode = "auto" | "required" | "off";
 const HOST_PATTERN = /^[a-z0-9:.-]+$/i;
 const SCANNER_COMMAND_PATTERN = /^[a-zA-Z0-9._/-]+$/;
+const HEX_64_PATTERN = /^[a-f0-9]{64}$/i;
 
 const appendMissingEnvKeys = (filePath: string): InstallerResult => {
   const result: InstallerResult = { created: false };
@@ -184,6 +185,115 @@ const parseIntegrityKey = (value: string | undefined): Buffer | null => parseHex
 const runtimeEncryptionKey = parseEncryptionKey(process.env.CONTENT_ENCRYPTION_KEY);
 const runtimeSecretEncryptionKey = parseSecretEncryptionKey(process.env.SECRET_ENCRYPTION_KEY);
 const runtimeIntegrityKey = parseIntegrityKey(process.env.CONTENT_INTEGRITY_KEY);
+
+const isProvided = (value: string | undefined): boolean => value !== undefined && value.trim().length > 0;
+
+const isPositiveIntString = (value: string): boolean => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
+const isNonNegativeIntString = (value: string): boolean => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0;
+};
+
+const isBooleanString = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  return ["1", "true", "yes", "on", "0", "false", "no", "off"].includes(normalized);
+};
+
+const collectConfigValidationErrors = (env: NodeJS.ProcessEnv): string[] => {
+  const errors: string[] = [];
+
+  const expectPositiveInt = (key: string): void => {
+    const value = env[key];
+    if (value === undefined) return;
+    if (!isPositiveIntString(value)) {
+      errors.push(`${key} muss eine positive Ganzzahl sein.`);
+    }
+  };
+
+  const expectNonNegativeInt = (key: string): void => {
+    const value = env[key];
+    if (value === undefined) return;
+    if (!isNonNegativeIntString(value)) {
+      errors.push(`${key} muss eine nicht-negative Ganzzahl sein.`);
+    }
+  };
+
+  const expectBoolean = (key: string): void => {
+    const value = env[key];
+    if (value === undefined) return;
+    if (!isBooleanString(value)) {
+      errors.push(`${key} muss true/false (oder 1/0, yes/no, on/off) sein.`);
+    }
+  };
+
+  const expectEnum = (key: string, allowed: string[]): void => {
+    const value = env[key];
+    if (value === undefined) return;
+    const normalized = value.trim().toLowerCase();
+    if (!allowed.includes(normalized)) {
+      errors.push(`${key} muss einer von [${allowed.join(", ")}] sein.`);
+    }
+  };
+
+  const expectHex64 = (key: string): void => {
+    const value = env[key];
+    if (!isProvided(value)) return;
+    if (!HEX_64_PATTERN.test(value ?? "")) {
+      errors.push(`${key} muss aus genau 64 Hex-Zeichen bestehen.`);
+    }
+  };
+
+  const host = env.HOST;
+  if (isProvided(host)) {
+    const normalized = host!.trim();
+    if (normalized !== "::" && normalized !== "::1" && !HOST_PATTERN.test(normalized)) {
+      errors.push("HOST enthält ungültige Zeichen.");
+    }
+  }
+
+  const scannerCommand = env.ATTACHMENT_SCANNER_CMD;
+  if (isProvided(scannerCommand) && !SCANNER_COMMAND_PATTERN.test(scannerCommand ?? "")) {
+    errors.push("ATTACHMENT_SCANNER_CMD enthält ungültige Zeichen.");
+  }
+
+  expectPositiveInt("PORT");
+  expectPositiveInt("SESSION_TTL_HOURS");
+  expectPositiveInt("BACKUP_AUTO_INTERVAL_HOURS");
+  expectPositiveInt("VERSION_HISTORY_RETENTION");
+  expectPositiveInt("SMTP_PORT");
+
+  expectNonNegativeInt("BACKUP_RETENTION_MAX_FILES");
+  expectNonNegativeInt("BACKUP_RETENTION_MAX_AGE_DAYS");
+  expectNonNegativeInt("VERSION_HISTORY_COMPRESS_AFTER");
+  expectNonNegativeInt("AUDIT_LOG_MAX_SIZE_MB");
+  expectNonNegativeInt("AUDIT_LOG_MAX_AGE_DAYS");
+
+  expectBoolean("BACKUP_AUTO_ENABLED");
+  expectBoolean("SMTP_SECURE");
+  expectBoolean("TRUST_PROXY");
+
+  expectEnum("INDEX_BACKEND", ["flat", "sqlite"]);
+  expectEnum("ATTACHMENT_SCAN_MODE", ["auto", "required", "off"]);
+
+  expectHex64("CONTENT_ENCRYPTION_KEY");
+  expectHex64("SECRET_ENCRYPTION_KEY");
+  expectHex64("CONTENT_INTEGRITY_KEY");
+  expectHex64("BACKUP_ENCRYPTION_KEY");
+
+  return errors;
+};
+
+const configValidationErrors = collectConfigValidationErrors(process.env);
+if (configValidationErrors.length > 0) {
+  for (const error of configValidationErrors) {
+    console.error(`[FATAL] Konfigurationsfehler: ${error}`);
+  }
+  process.exit(1);
+}
 
 export const config = {
   rootDir,

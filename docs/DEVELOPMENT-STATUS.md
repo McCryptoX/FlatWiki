@@ -101,4 +101,8 @@ Code-Review aller Checklisten-Punkte ergab: Fast alles bereits auf `main` implem
   - `tests/password.test.ts` (scrypt hash/verify + Rehash/Strength)
   - `tests/auth-csrf.test.ts` (Login-/Session-CSRF + Form-CSRF-Guard)
   - `tests/wiki-crypto-integrity.test.ts` (verschlüssertes Speichern + Integrität + Roundtrip)
+- `src/config.ts`: zentrale Fail-fast-Validierung für ENV-Werte ergänzt
+  - Integer-/Boolean-/Enum-Checks
+  - Host/Scanner-Pattern-Checks
+  - 64-hex-Key-Checks für kryptografische Schlüssel
 - Hinweis: In dieser Ausführungsumgebung sind `node`/`npm` nicht verfügbar; Installation und Testlauf müssen lokal erfolgen.
