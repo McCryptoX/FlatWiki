@@ -1458,7 +1458,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     });
 
     if (!result.ok) {
-      return reply.redirect(`/admin/ui?error=${encodeURIComponent(result.error ?? "SMTP-Einstellungen konnten nicht gespeichert werden.")}`);
+      return reply.redirect(`/admin/mail?error=${encodeURIComponent(result.error ?? "SMTP-Einstellungen konnten nicht gespeichert werden.")}`);
     }
 
     await writeAuditLog({
@@ -1475,7 +1475,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     });
 
     const notice = result.changed ? "SMTP-Einstellungen gespeichert." : "SMTP-Einstellungen unverändert.";
-    return reply.redirect(`/admin/ui?notice=${encodeURIComponent(notice)}`);
+    return reply.redirect(`/admin/mail?notice=${encodeURIComponent(notice)}`);
   });
 
   app.get("/admin/mail", { preHandler: [requireAdmin] }, async (request, reply) => {
