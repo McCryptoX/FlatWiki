@@ -134,10 +134,7 @@ export const renderLayout = (options: LayoutOptions): string => {
   ].join("\n");
 
   const optionScripts = options.scripts ?? [];
-  const hasArticlePage = options.body.includes('class="wiki-page article-page');
-  const hasArticleTocScript = optionScripts.some((path) => path.startsWith("/article-toc.js"));
-  const autoArticleScripts = hasArticlePage && !hasArticleTocScript ? ["/article-toc.js?v=5"] : [];
-  const scripts = [...(user || publicReadEnabled ? ["/search-suggest.js?v=3", "/cmd-palette.js?v=2"] : []), "/js/main.js?v=3", ...optionScripts, ...autoArticleScripts]
+  const scripts = [...(user || publicReadEnabled ? ["/search-suggest.js?v=3", "/cmd-palette.js?v=2"] : []), "/js/main.js?v=3", ...optionScripts]
     .filter((scriptPath) => scriptPath.startsWith("/"))
     .map((scriptPath) => `<script src="${escapeHtml(scriptPath)}" defer></script>`)
     .join("\n");
