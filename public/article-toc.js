@@ -69,7 +69,6 @@
         }
       });
 
-      heading.classList.add("has-anchor-copy");
       heading.append(button);
     }
   };

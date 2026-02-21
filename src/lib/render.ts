@@ -160,8 +160,8 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta property="og:type" content="website" />
     <meta property="og:url" content="${escapeHtml(canonicalHref)}" />
     <style>${_themeCss}</style>
-    <link rel="preload" href="/css/components.css?v=6" as="style" />
-    <link rel="stylesheet" href="/css/components.css?v=6" />
+    <link rel="preload" href="/css/components.css?v=7" as="style" />
+    <link rel="stylesheet" href="/css/components.css?v=7" />
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"${escapeHtml(siteTitle)}","url":"${escapeHtml((config.publicBaseUrl || "").replace(/\/+$/, "") || "/")}"}</script>
   </head>
   <body>

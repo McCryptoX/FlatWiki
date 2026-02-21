@@ -1658,7 +1658,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     `;
 
     const scripts: string[] = [];
-    if (articleToc) scripts.push("/article-toc.js?v=4");
+    if (articleToc) scripts.push("/article-toc.js?v=5");
     if (request.currentUser) scripts.push("/comment-mention.js?v=6");
 
     return reply.type("text/html").send(

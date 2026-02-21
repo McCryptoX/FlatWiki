@@ -1751,7 +1751,7 @@ th {
   scroll-margin-top: calc(var(--scroll-padding-top) + 0.5rem);
 }
 
-.wiki-content :is(h2, h3).has-anchor-copy {
+.wiki-content :is(h2, h3) {
   position: relative;
   padding-right: 1.75rem;
 }
