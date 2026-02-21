@@ -86,27 +86,41 @@ FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admi
 
 Startseite:
 
-![FlatWiki Startseite](docs/images/01-startseite.png)
+![FlatWiki Startseite](docs/screenshots/screenshot-home.png)
 
 Artikelansicht:
 
-![FlatWiki Artikelansicht](docs/images/02-artikelansicht.png)
+![FlatWiki Artikelansicht](docs/screenshots/screenshot-article.png)
 
-Artikel bearbeiten:
+Inhaltsverzeichnis:
 
-![FlatWiki Artikel bearbeiten](docs/images/03-artikel-bearbeiten.png)
+![FlatWiki Inhaltsverzeichnis](docs/screenshots/screenshot-toc.png)
 
-Admin-Bereiche:
+Admin-Bereich:
 
-![Admin Benutzerverwaltung](docs/images/04-admin-benutzerverwaltung.png)
-![Admin Bildverwaltung](docs/images/05-admin-bildverwaltung.png)
-![Admin Kategorien](docs/images/06-admin-kategorien.png)
-![Admin Gruppen](docs/images/07-admin-gruppen.png)
-![Admin Versionen](docs/images/08-admin-versionen.png)
-![Admin Link-Check](docs/images/09-admin-link-check.png)
-![Admin Suchindex](docs/images/10-admin-suchindex.png)
+![FlatWiki Admin](docs/screenshots/screenshot-admin.png)
+
+Light-Mode:
+
+![FlatWiki Light-Mode](docs/screenshots/screenshot-home-light.png)
 
 ## Starten
+
+### Schnellstart (Docker empfohlen)
+
+Voraussetzungen: Docker Engine + Compose + Buildx
+
+```bash
+git clone https://github.com/McCryptoX/flatwiki && cd flatwiki && ./install.sh
+```
+
+Das Script erstellt `config.env` mit sicheren Zufallswerten und startet FlatWiki automatisch mit Docker.
+
+Beim ersten Start den Setup-Assistenten aufrufen:
+
+- [http://127.0.0.1:3000/setup](http://127.0.0.1:3000/setup)
+
+---
 
 ### Option A: Node.js + npm
 

@@ -15,4 +15,3 @@ data/audit.log
 backups/
 deploy/
 docker-compose.caddy.yml
-_impressum/

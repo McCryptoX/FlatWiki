@@ -70,3 +70,17 @@ fi
 echo "- Admin wird über den visuellen Setup-Assistenten beim ersten Start angelegt."
 echo "- Optional für Headless-Bootstrap: BOOTSTRAP_ADMIN_PASSWORD manuell in config.env setzen."
 echo "- Bitte config.env vor Produktion prüfen und sensible Werte sicher aufbewahren."
+
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  echo ""
+  echo "Starte FlatWiki mit Docker..."
+  docker compose up -d --build
+  echo ""
+  echo "FlatWiki läuft unter:              http://127.0.0.1:3000"
+  echo "Setup-Assistent (erster Start):    http://127.0.0.1:3000/setup"
+else
+  echo ""
+  echo "Docker nicht gefunden. FlatWiki manuell starten:"
+  echo "  docker compose up -d --build   (Docker)"
+  echo "  npm install && npm run dev     (Node.js Entwicklung)"
+fi
