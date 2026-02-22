@@ -1,5 +1,10 @@
 # FlatWiki
 
+[![Website](https://img.shields.io/badge/Website-flatwiki.de-blue)](https://flatwiki.de)
+[![Live Demo](https://img.shields.io/badge/Demo-Live-success)](https://flatwiki.de)
+
+👉 **Projektseite & Live-Demo:** https://flatwiki.de
+
 FlatWiki ist ein modernes, durchsuchbares Flat-File-Wiki mit Login, Rollen, Admin-Benutzerverwaltung und Markdown-Seiten.
 Aktueller Release-Stand: `v0.8.1` ([Release Notes](docs/releases/v0.8.1.md))
 
