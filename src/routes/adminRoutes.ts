@@ -1323,7 +1323,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string; mi
   { key: "ui", href: "/admin/ui", label: "Bedienmodus" },
   { key: "mail", href: "/admin/mail", label: "E-Mail" },
   { key: "comments", href: "/admin/comments", label: "Kommentare" },
-  { key: "media", href: "/admin/media", label: "Bildverwaltung" },
+  { key: "media", href: "/admin/media", label: "Uploads & Bilder" },
   { key: "import", href: "/admin/import/wikitext", label: "Wikitext-Import", minMode: "advanced" },
   { key: "categories", href: "/admin/categories", label: "Kategorien" },
   { key: "templates", href: "/admin/templates", label: "Vorlagen" },
@@ -2212,20 +2212,20 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
 
     const body = `
       ${renderAdminHeader({
-        title: "Bildverwaltung",
+        title: "Uploads & Bilder",
         description: "Upload-Dateien prüfen, Referenzen nachvollziehen und unbenutzte Bilder entfernen.",
         active: "media",
         actions: `
           <form method="post" action="/admin/media/cleanup" onsubmit="return confirm('Alle ungenutzten Bilddateien wirklich löschen?')">
             <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-            <button type="submit">Ungenutzte Bilder löschen</button>
+            <button type="submit">Verwaiste Bilder löschen</button>
           </form>
           <form method="post" action="/admin/media/derivatives/backfill">
             <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
             <input type="hidden" name="dryRun" value="0" />
             <input type="hidden" name="limit" value="500" />
             <input type="hidden" name="concurrency" value="2" />
-            <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Derivate-Backfill starten</button>
+            <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Bestehende Bilder konvertieren</button>
           </form>
         `
       })}
@@ -2235,25 +2235,25 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           ${orphanCount} ungenutzt.
         </p>
         <p class="muted-note">
-          Derivate-Tools: AVIF (${toolingStatus.avifenc.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.avifenc.command)}</code>),
+          Konverter-Status: AVIF (${toolingStatus.avifenc.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.avifenc.command)}</code>),
           WEBP (${toolingStatus.cwebp.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.cwebp.command)}</code>)
         </p>
         <form method="post" action="/admin/media/derivatives/backfill" class="action-row">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Limit
+          <label>Max. Bilder
             <input type="number" name="limit" min="1" max="10000" value="500" />
           </label>
-          <label>Concurrency
+          <label>Gleichzeitig
             <input type="number" name="concurrency" min="1" max="8" value="2" />
           </label>
-          <label>Seit Datum (optional)
+          <label>Nur seit Datum (optional)
             <input type="date" name="since" />
           </label>
           <label>
             <input type="checkbox" name="dryRun" value="1" />
-            Dry-Run
+            Testlauf (ohne Änderungen)
           </label>
-          <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Derivate-Backfill ausführen</button>
+          <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Konvertierung starten</button>
         </form>
         ${renderMediaTable(request.csrfToken ?? "", report)}
         ${renderMissingMediaReferences(report)}
@@ -2263,7 +2263,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     return reply.type("text/html").send(
       renderLayout({
         canonicalPath: (request.url.split("?")[0] ?? "/"),
-        title: "Bildverwaltung",
+        title: "Uploads & Bilder",
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
@@ -2358,7 +2358,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     if (!tooling.avifenc.available || !tooling.cwebp.available) {
       return reply.redirect(
         `/admin/media?error=${encodeURIComponent(
-          `Derivate-Tools fehlen (avifenc=${tooling.avifenc.available ? "ok" : "fehlt"}, cwebp=${tooling.cwebp.available ? "ok" : "fehlt"}). Bitte Container neu bauen.`
+          `Konverter fehlen (avifenc=${tooling.avifenc.available ? "ok" : "fehlt"}, cwebp=${tooling.cwebp.available ? "ok" : "fehlt"}). Bitte Container neu bauen.`
         )}`
       );
     }
@@ -2371,13 +2371,13 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const since = sinceCandidate && Number.isFinite(sinceCandidate.getTime()) ? sinceCandidate : undefined;
 
     if (!Number.isFinite(limit) || limit < 1 || limit > 10_000) {
-      return reply.redirect("/admin/media?error=Limit+muss+zwischen+1+und+10000+liegen");
+      return reply.redirect("/admin/media?error=Max.+Bilder+muss+zwischen+1+und+10000+liegen");
     }
     if (!Number.isFinite(concurrency) || concurrency < 1 || concurrency > 8) {
-      return reply.redirect("/admin/media?error=Concurrency+muss+zwischen+1+und+8+liegen");
+      return reply.redirect("/admin/media?error=Gleichzeitig+muss+zwischen+1+und+8+liegen");
     }
     if (sinceRaw && !since) {
-      return reply.redirect("/admin/media?error=Ung%C3%BCltiges+since-Datum+(YYYY-MM-DD)");
+      return reply.redirect("/admin/media?error=Ung%C3%BCltiges+Datum+(YYYY-MM-DD)");
     }
 
     const summary = await backfillUploadDerivatives({
@@ -2400,7 +2400,7 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       }
     });
 
-    const notice = `Backfill ${dryRun ? "Dry-Run" : "ausgeführt"}: eligible=${summary.eligible}, converted=${summary.converted}, skipped=${summary.skipped}, errors=${summary.errors}`;
+    const notice = `Konvertierung ${dryRun ? "Testlauf" : "ausgeführt"}: eligible=${summary.eligible}, converted=${summary.converted}, skipped=${summary.skipped}, errors=${summary.errors}`;
     return reply.redirect(`/admin/media?notice=${encodeURIComponent(notice)}`);
   });
 
