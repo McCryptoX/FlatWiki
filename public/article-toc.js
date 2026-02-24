@@ -82,21 +82,18 @@
       tocRoot = document.createElement("aside");
       tocRoot.className = "article-toc";
       tocRoot.setAttribute("aria-label", "Inhaltsverzeichnis");
-      article.insertBefore(tocRoot, main);
+      article.insertBefore(tocRoot, main.nextSibling);
       article.classList.add("article-layout");
     }
 
-    if (!tocRoot.querySelector(".toc-toggle")) {
-      tocRoot.innerHTML = `<button type="button" class="toc-toggle" aria-expanded="false">Inhaltsverzeichnis</button><div class="toc-body"><h2>Inhaltsverzeichnis</h2><ul></ul><div class="article-toc-actions"><button type="button" class="button secondary tiny" data-share-article>Artikel teilen</button></div></div>`;
+    if (!(tocRoot.querySelector("h2") instanceof HTMLElement)) {
+      const heading = document.createElement("h2");
+      heading.textContent = "Inhaltsverzeichnis";
+      tocRoot.append(heading);
     }
-
-    const toggle = tocRoot.querySelector(".toc-toggle");
-    if (toggle instanceof HTMLButtonElement && toggle.dataset.bound !== "1") {
-      toggle.dataset.bound = "1";
-      toggle.addEventListener("click", () => {
-        const expanded = toggle.getAttribute("aria-expanded") === "true";
-        toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
-      });
+    if (!(tocRoot.querySelector("ul") instanceof HTMLElement)) {
+      const list = document.createElement("ul");
+      tocRoot.append(list);
     }
 
     return tocRoot;
@@ -185,33 +182,6 @@
     const toc = buildToc();
     if (toc) {
       setupActiveState(toc.tocRoot, toc.entries);
-      const shareButton = toc.tocRoot.querySelector("[data-share-article]");
-      if (shareButton instanceof HTMLButtonElement && shareButton.dataset.bound !== "1") {
-        shareButton.dataset.bound = "1";
-        shareButton.addEventListener("click", async () => {
-          const shareUrl = window.location.href;
-          if (navigator.share) {
-            try {
-              await navigator.share({
-                title: document.title,
-                url: shareUrl
-              });
-              return;
-            } catch {
-              // fallback to clipboard
-            }
-          }
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-            try {
-              await navigator.clipboard.writeText(shareUrl);
-              shareButton.textContent = "Link kopiert";
-              window.setTimeout(() => {
-                shareButton.textContent = "Artikel teilen";
-              }, 1300);
-            } catch {}
-          }
-        });
-      }
       return;
     }
     if (attempt < MAX_RETRIES) {

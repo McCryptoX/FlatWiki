@@ -1410,12 +1410,12 @@ export const renderAdminHeader = (input: {
   active?: AdminNavKey;
   actions?: string;
 }): string => `
-  <div class="flex flex-col sm:flex-row sm:items-end justify-between mb-6 gap-4">
-    <div>
-      <h1 class="text-2xl font-bold text-white leading-tight">${input.title}</h1>
-      <p class="text-sm text-slate-400 mt-1">${input.description}</p>
+  <div class="admin-page-header">
+    <div class="admin-page-header-copy">
+      <h1>${input.title}</h1>
+      <p>${input.description}</p>
     </div>
-    ${input.actions ? `<div class="shrink-0 flex flex-wrap gap-2 justify-start sm:justify-end">${input.actions}</div>` : ""}
+    ${input.actions ? `<div class="admin-page-actions">${input.actions}</div>` : ""}
   </div>
 `;
 
@@ -2296,13 +2296,6 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           <form method="post" action="/admin/media/cleanup" onsubmit="return confirm('Alle ungenutzten Bilddateien wirklich löschen?')">
             <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
             <button type="submit" class="danger">Verwaiste Bilder löschen</button>
-          </form>
-          <form method="post" action="/admin/media/derivatives/backfill">
-            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-            <input type="hidden" name="dryRun" value="0" />
-            <input type="hidden" name="limit" value="500" />
-            <input type="hidden" name="concurrency" value="2" />
-            <button type="submit" class="secondary" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Bestehende Bilder konvertieren</button>
           </form>
           <button type="submit" form="media-backfill-form" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Konvertierung starten</button>
         `,

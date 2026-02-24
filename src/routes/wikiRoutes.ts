@@ -303,7 +303,12 @@ const syncUploadCryptoForMarkdown = async (input: {
       if (decryptResult.wasEncrypted) {
         changed += 1;
       }
-      await removeUploadSecurityByFile(targetName);
+      await upsertUploadSecurityEntry({
+        fileName: targetName,
+        slug: input.slug,
+        encrypted: false,
+        mimeType: resolveMimeTypeByUploadName(targetName)
+      });
     }
   }
 
@@ -529,24 +534,18 @@ const renderArticleToc = (slug: string, headings: Array<{ id: string; text: stri
 
   return `
     <aside class="article-toc" aria-label="Inhaltsverzeichnis">
-      <button type="button" class="toc-toggle" aria-expanded="false">Inhaltsverzeichnis</button>
-      <div class="toc-body">
-        <h2>Inhaltsverzeichnis</h2>
-        <ul>
-          ${headings
-            .map(
-              (heading) => `
-                <li class="depth-${Math.min(Math.max(heading.depth, 2), 6)}">
-                  <a href="/wiki/${encodeURIComponent(slug)}#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>
-                </li>
-              `
-            )
-            .join("")}
-        </ul>
-        <div class="article-toc-actions">
-          <button type="button" class="button secondary tiny" data-share-article>Artikel teilen</button>
-        </div>
-      </div>
+      <h2>Inhaltsverzeichnis</h2>
+      <ul>
+        ${headings
+          .map(
+            (heading) => `
+              <li class="depth-${Math.min(Math.max(heading.depth, 2), 6)}">
+                <a href="/wiki/${encodeURIComponent(slug)}#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>
+              </li>
+            `
+          )
+          .join("")}
+      </ul>
     </aside>
   `;
 };
@@ -898,13 +897,16 @@ const renderRecentPages = (pages: WikiPageSummary[]): string => {
         .map((page) => {
           const updatedBy = page.updatedBy && page.updatedBy !== "unknown" ? `von ${page.updatedBy}` : "";
           const metaBits = [formatDate(page.updatedAt), updatedBy].filter((entry) => entry.length > 0);
+          const metaText = metaBits.join(" • ");
           return `
             <li>
-              <a class="dashboard-recent-row" href="/wiki/${encodeURIComponent(page.slug)}">
-                <span class="dashboard-recent-title">${escapeHtml(page.title)}</span>
+              <a href="/wiki/${encodeURIComponent(page.slug)}" class="dashboard-recent-row">
+                <h3 class="dashboard-recent-title">${escapeHtml(
+                  page.title
+                )}</h3>
                 <span class="dashboard-recent-meta">
                   <span class="meta-badge">${escapeHtml(page.categoryName)}</span>
-                  <span>${escapeHtml(metaBits.join(" • "))}</span>
+                  <span>• ${escapeHtml(metaText)}</span>
                 </span>
               </a>
             </li>
@@ -928,12 +930,21 @@ const renderTrendingTopics = (
         .map(
           (topic, index) => `
             <li>
-              <span class="dashboard-trending-rank">${index + 1}</span>
-              <a href="/wiki/${encodeURIComponent(topic.slug)}">${escapeHtml(topic.title)}</a>
-              <span class="dashboard-trending-count">${topic.views} Aufrufe</span>
-              <span class="dashboard-trending-meta"><span class="meta-badge">${escapeHtml(topic.categoryName)}</span> <span>zuletzt ${escapeHtml(
-                formatDate(topic.lastViewedAt)
-              )}</span></span>
+              <a href="/wiki/${encodeURIComponent(topic.slug)}" class="dashboard-trending-row">
+                <span class="dashboard-trending-rank">${index + 1}</span>
+                <div class="dashboard-trending-content">
+                  <div class="dashboard-trending-head">
+                    <h3 class="dashboard-trending-title">${escapeHtml(
+                      topic.title
+                    )}</h3>
+                    <span class="dashboard-trending-count">${topic.views} Aufrufe</span>
+                  </div>
+                  <div class="dashboard-trending-meta">
+                    <span class="meta-badge">${escapeHtml(topic.categoryName)}</span>
+                    <span>• zuletzt ${escapeHtml(formatDate(topic.lastViewedAt))}</span>
+                  </div>
+                </div>
+              </a>
             </li>
           `
         )
@@ -979,6 +990,7 @@ const renderEditorForm = (params: {
   lastKnownConflictToken?: string | undefined;
   canDelete?: boolean;
   deleteAction?: string | undefined;
+  cancelHref?: string | undefined;
 }): string => {
   const securityProfileNote = params.showSensitiveProfileOption
     ? "Standard: frei. Sensibel: eingeschränkt + verschlüsselt. Vertraulich: zusätzlich ohne Tags und ohne Live-Vorschläge."
@@ -988,7 +1000,7 @@ const renderEditorForm = (params: {
   const accessOpen = !securityOpen && params.visibility === "restricted";
 
   const editorFormId = params.mode === "new" ? "page-create-form" : "page-edit-form";
-  const cancelHref = params.mode === "edit" ? `/wiki/${encodeURIComponent(params.slug)}` : "/wiki";
+  const cancelHref = (params.cancelHref && params.cancelHref.trim()) || (params.mode === "edit" && params.slug ? `/wiki/${encodeURIComponent(params.slug)}` : "/");
 
   return `
     <section class="editor-shell editor-shell-redesign" data-preview-endpoint="/api/markdown/preview" data-csrf="${escapeHtml(
@@ -1004,7 +1016,7 @@ const renderEditorForm = (params: {
           <div class="editor-topbar-left">
             <a class="editor-back-link" href="${escapeHtml(cancelHref)}">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 19l-7-7 7-7M3 12h18"/></svg>
-              <span>Zurück</span>
+              <span>← Zurück</span>
             </a>
             <span class="editor-topbar-sep" aria-hidden="true"></span>
             <span class="editor-topbar-context">${params.mode === "new" ? "Neue Seite" : "Dokument bearbeiten"}</span>
@@ -1428,7 +1440,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
     const canWrite = Boolean(request.currentUser);
     const body = `
-      <section class="dashboard-shell stack large">
+      <section class="dashboard-shell">
         <section class="dashboard-hero">
           <h1>Finde Wissen in Sekunden</h1>
           <p>Durchsuche Inhalte direkt. Über das Plus kannst du die Filter aufklappen.</p>
@@ -1452,7 +1464,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                   type="search"
                   name="q"
                   value="${escapeHtml(searchQuery)}"
-                  placeholder="Suche in Artikeln, Tags und Kategorien…"
+                  placeholder="Suche in Artikeln, Tags und Kategorien..."
                   autocomplete="off"
                 />
                 <div class="search-suggest" hidden></div>
@@ -1506,19 +1518,17 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           </form>
           <div class="dashboard-hero-links">
             <a href="/search">Erweiterte Suche</a>
-            <a href="/toc">Inhaltsverzeichnis</a>
+            <a href="/toc" class="dashboard-link-toc">Inhaltsverzeichnis</a>
             ${canWrite ? '<a href="/new">Neue Seite</a>' : '<a href="/login">Anmelden</a>'}
           </div>
         </section>
 
         <section class="dashboard-panels-grid">
-          <section class="content-wrap dashboard-recent-panel">
-            <details class="dashboard-recent-disclosure" open>
-              <summary>Letzte Änderungen (7 Tage)</summary>
-              ${renderRecentPages(recentPages)}
-            </details>
+          <section class="dashboard-card dashboard-recent-panel">
+            <h2>Letzte Änderungen <span>(7 Tage) ▾</span></h2>
+            ${renderRecentPages(recentPages)}
           </section>
-          <section class="content-wrap dashboard-trending-panel">
+          <section class="dashboard-card dashboard-trending-panel">
             <h2>Trending-Themen</h2>
             <p class="muted-note small">Meistgelesen in den letzten 30 Tagen.</p>
             ${renderTrendingTopics(trendingTopics)}
@@ -1536,7 +1546,8 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         csrfToken: request.csrfToken,
         notice: readSingle(query.notice),
         error: readSingle(query.error),
-        hideHeaderSearch: true,
+        mainClassName: "dashboard-main",
+        hideFooter: true,
         scripts: ["/home-search.js?v=5"]
       })
     );
@@ -1753,10 +1764,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .join("");
     const body = `
       <article class="wiki-page article-page ${articleToc ? "article-layout" : ""}">
-        ${articleToc}
         <div class="article-main">
           ${breadcrumbs}
-          <header class="article-header article-hero-card">
+          <header class="article-header">
             <div class="article-hero-head">
               <h1>${escapeHtml(page.title)}</h1>
               <div class="actions">
@@ -1786,14 +1796,20 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                 }
               </div>
             </div>
-            <div class="article-meta-row article-meta-compact">
-              <span class="meta-pill">Autor: ${escapeHtml(page.updatedBy)}</span>
-              <span class="meta-pill">Zuletzt: <time datetime="${escapeHtml(page.updatedAt)}">${escapeHtml(formatDate(page.updatedAt))}</time></span>
-              <span class="meta-pill">Kategorie: ${escapeHtml(page.categoryName)}</span>
-              <span class="meta-pill">Profil: ${escapeHtml(formatSecurityProfileLabel(page.securityProfile))}</span>
-              <span class="meta-pill">Zugriff: ${escapeHtml(visibilityLabel)}</span>
-              <span class="meta-pill">${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"}</span>
-              <span class="meta-pill">Integrität: ${escapeHtml(integrityLabel)}</span>
+            <div class="article-meta-row article-meta-inline">
+              <span>Autor: ${escapeHtml(page.updatedBy)}</span>
+              <span aria-hidden="true">•</span>
+              <span>Zuletzt: <time datetime="${escapeHtml(page.updatedAt)}">${escapeHtml(formatDate(page.updatedAt))}</time></span>
+              <span aria-hidden="true">•</span>
+              <span>Kategorie: ${escapeHtml(page.categoryName)}</span>
+              <span aria-hidden="true">•</span>
+              <span>Profil: ${escapeHtml(formatSecurityProfileLabel(page.securityProfile))}</span>
+              <span aria-hidden="true">•</span>
+              <span>Zugriff: ${escapeHtml(visibilityLabel)}</span>
+              <span aria-hidden="true">•</span>
+              <span>${page.encrypted ? "Verschlüsselt" : "Unverschlüsselt"}</span>
+              <span aria-hidden="true">•</span>
+              <span>Integrität: ${escapeHtml(integrityLabel)}</span>
             </div>
             ${tagBadges ? `<div class="card-tags">${tagBadges}</div>` : ""}
             ${
@@ -1896,11 +1912,12 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
             }
           </section>
         </div>
+        ${articleToc}
       </article>
     `;
 
     const scripts: string[] = [];
-    if (articleToc) scripts.push("/article-toc.js?v=6");
+    if (articleToc) scripts.push("/article-toc.js?v=7");
     if (request.currentUser) scripts.push("/comment-mention.js?v=6");
 
     return reply.type("text/html").send(
@@ -2222,6 +2239,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
+        mainClassName: "editor-main",
         scripts: ["/wiki-ui.js?v=30"]
       })
     );
@@ -2539,6 +2557,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         user: request.currentUser,
         csrfToken: request.csrfToken,
         error: readSingle(query.error),
+        mainClassName: "editor-main",
         scripts: ["/wiki-ui.js?v=30"]
       })
     );
@@ -2665,7 +2684,12 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           }
         } else {
           for (const familyFile of family) {
-            await removeUploadSecurityByFile(familyFile);
+            await upsertUploadSecurityEntry({
+              fileName: familyFile,
+              slug: pageSlug,
+              encrypted: false,
+              mimeType: resolveMimeTypeByUploadName(familyFile)
+            });
           }
         }
 
@@ -2812,6 +2836,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           user: request.currentUser,
           csrfToken: request.csrfToken,
           error: `Konflikt: Diese Seite wurde zwischenzeitlich von „${escapeHtml(existing.updatedBy)}" am ${formatDate(existing.updatedAt)} geändert. Deine Änderungen sind unten erhalten – bitte prüfen und erneut speichern.`,
+          mainClassName: "editor-main",
           scripts: ["/wiki-ui.js?v=30"]
         })
       );

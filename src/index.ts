@@ -16,7 +16,7 @@ import { ensureDefaultTemplates } from "./lib/templateStore.js";
 import { getPublicReadEnabled, getUploadDerivativesEnabled, initRuntimeSettings } from "./lib/runtimeSettingsStore.js";
 import { ensureSearchIndexConsistency } from "./lib/searchIndexStore.js";
 import { purgeExpiredSessions } from "./lib/sessionStore.js";
-import { resolveUploadAccess } from "./lib/uploadAccessPolicy.js";
+import { resolveUploadAccess, resolveUploadFileAccess } from "./lib/uploadAccessPolicy.js";
 import { normalizeUploadFileName } from "./lib/mediaStore.js";
 import { resolveNegotiatedUploadPath } from "./lib/uploadDerivatives.js";
 import { getUploadCacheControl } from "./lib/uploadResponsePolicy.js";
@@ -90,8 +90,8 @@ const registerPlugins = async (): Promise<void> => {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", themeInitCspHash],
-        styleSrc: ["'self'", "https://fonts.googleapis.com", themeCssCspHash],
-        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        styleSrc: ["'self'", themeCssCspHash],
+        fontSrc: ["'self'"],
         imgSrc: ["'self'", "data:", "https:"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
@@ -175,6 +175,24 @@ const registerRoutes = async (): Promise<void> => {
 
       const resolvedMeta = await getUploadSecurityByFile(resolvedPath);
       const originalMeta = resolvedPath === normalized ? resolvedMeta : await getUploadSecurityByFile(normalized);
+      const scopedMeta = resolvedMeta ?? originalMeta;
+
+      if (scopedMeta) {
+        const scopedPage = await getPage(scopedMeta.slug);
+        const scopedAccessDecision = resolveUploadFileAccess({
+          isAuthenticated: Boolean(request.currentUser),
+          publicReadEnabled: getPublicReadEnabled(),
+          hasScopedRule: true,
+          userCanAccessScopedFile: Boolean(scopedPage && canUserAccessPage(scopedPage, request.currentUser))
+        });
+        if (!scopedAccessDecision.allowed) {
+          return reply
+            .code(scopedAccessDecision.statusCode ?? 401)
+            .type("text/plain; charset=utf-8")
+            .send(scopedAccessDecision.statusCode === 403 ? "Kein Zugriff." : "Nicht angemeldet.");
+        }
+      }
+
       const secureMeta = resolvedMeta?.encrypted ? resolvedMeta : originalMeta?.encrypted ? originalMeta : null;
 
       if (secureMeta?.encrypted) {

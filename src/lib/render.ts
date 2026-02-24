@@ -94,6 +94,11 @@ const breadcrumbLabelMap: Record<string, string> = {
 
 const getBreadcrumbLabel = (segment: string): string => breadcrumbLabelMap[segment.toLowerCase()] ?? formatPathSegment(segment);
 
+const breadcrumbHrefMap: Record<string, string> = {
+  "/admin": "/admin/users",
+  "/wiki": "/toc"
+};
+
 const isPathActive = (pathname: string, href: string): boolean => {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -140,7 +145,8 @@ const appNavItems: AppNavItem[] = [
   { key: "new", href: "/new", label: "Neue Seite", requiresAuth: true },
   { key: "notifications", href: "/notifications", label: "Benachrichtigungen", requiresAuth: true },
   { key: "account", href: "/account", label: "Konto", requiresAuth: true },
-  { key: "admin", href: "/admin/users", label: "Admin", requiresAdmin: true }
+  { key: "admin", href: "/admin/users", label: "Admin", requiresAdmin: true },
+  { key: "uploads", href: "/admin/media", label: "Uploads", requiresAdmin: true }
 ];
 
 export const renderLayout = (options: LayoutOptions): string => {
@@ -166,29 +172,6 @@ export const renderLayout = (options: LayoutOptions): string => {
 
   const themeToggle = `<button type="button" class="theme-toggle ghost tiny" aria-label="Farbschema wechseln" title="Farbschema wechseln" data-theme-toggle><span class="theme-toggle-icon" aria-hidden="true"></span></button>`;
 
-  const mobileSidebarNav = user
-    ? `
-      <div class="mobile-sidebar-meta">
-        <span class="user-avatar">${escapeHtml(userInitials)}</span>
-        <strong>${escapeHtml(user.displayName)}</strong>
-      </div>
-      <a href="/toc">Inhaltsverzeichnis</a>
-      <a href="/notifications">Benachrichtigungen${
-        user.unreadNotificationsCount && user.unreadNotificationsCount > 0
-          ? ` <span class="notif-badge">${Math.min(user.unreadNotificationsCount, 99)}</span>`
-          : ""
-      }</a>
-      <a href="/account">Konto</a>
-      ${user.role === "admin" ? `<a href="/admin/users">Admin</a>` : ""}
-      <form method="post" action="/logout">
-        <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken ?? "")}" />
-        <button type="submit" class="ghost">Abmelden</button>
-      </form>
-    `
-    : `
-      <a href="/login">Anmelden</a>
-    `;
-
   const breadcrumbParts = pathname
     .split("/")
     .filter((segment) => segment.length > 0)
@@ -198,27 +181,74 @@ export const renderLayout = (options: LayoutOptions): string => {
     let rollingPath = "";
     for (const segment of breadcrumbParts) {
       rollingPath += `/${segment}`;
-      breadcrumbLinks.push(`<a href="${escapeHtml(rollingPath)}">${escapeHtml(getBreadcrumbLabel(segment))}</a>`);
+      const breadcrumbHref = breadcrumbHrefMap[rollingPath] ?? rollingPath;
+      breadcrumbLinks.push(`<a href="${escapeHtml(breadcrumbHref)}">${escapeHtml(getBreadcrumbLabel(segment))}</a>`);
     }
   }
   const breadcrumbs = `<nav class="app-breadcrumbs" aria-label="Breadcrumb">${breadcrumbLinks.join(
     '<span aria-hidden="true">/</span>'
   )}</nav>`;
 
-  const sidebarNav = appNavItems
+  const visibleNavItems = appNavItems
     .filter((item) => {
       if (item.requiresAdmin) return user?.role === "admin";
       if (item.requiresAuth) return Boolean(user);
       return true;
-    })
-    .map((item) => {
+    });
+
+  const sidebarNavRows = visibleNavItems
+    .map((item, index) => {
       const active = isPathActive(pathname, item.href);
-      return `<a href="${item.href}" class="${active ? "is-active" : ""}" ${active ? 'aria-current="page"' : ""}>
+      const badge =
+        item.key === "notifications" && user?.unreadNotificationsCount && user.unreadNotificationsCount > 0
+          ? ` <span class="notif-badge" aria-label="${Math.min(user.unreadNotificationsCount, 99)} ungelesen">${Math.min(user.unreadNotificationsCount, 99)}</span>`
+          : "";
+      const row = `<a href="${item.href}" class="${active ? "is-active" : ""}" ${active ? 'aria-current="page"' : ""}>
         <span class="sidebar-item-icon">${renderSidebarIcon(item.key)}</span>
-        <span class="sidebar-item-label">${escapeHtml(item.label)}</span>
+        <span class="sidebar-item-label">${escapeHtml(item.label)}${badge}</span>
       </a>`;
+      if (item.key === "new" && index < visibleNavItems.length - 1) {
+        return `${row}<div class="app-sidebar-divider" aria-hidden="true"></div>`;
+      }
+      return row;
     })
     .join("");
+  const sidebarNav = sidebarNavRows;
+
+  const mobileNavLinks = visibleNavItems
+    .map((item, index) => {
+      const active = isPathActive(pathname, item.href);
+      const badge =
+        item.key === "notifications" && user?.unreadNotificationsCount && user.unreadNotificationsCount > 0
+          ? ` <span class="notif-badge" aria-label="${Math.min(user.unreadNotificationsCount, 99)} ungelesen">${Math.min(user.unreadNotificationsCount, 99)}</span>`
+          : "";
+      const row = `<a href="${item.href}" class="${active ? "is-active" : ""}" ${active ? 'aria-current="page"' : ""}>
+        <span class="sidebar-item-icon">${renderSidebarIcon(item.key)}</span>
+        <span class="sidebar-item-label">${escapeHtml(item.label)}${badge}</span>
+      </a>`;
+      if (item.key === "new" && index < visibleNavItems.length - 1) {
+        return `${row}<div class="app-sidebar-divider" aria-hidden="true"></div>`;
+      }
+      return row;
+    })
+    .join("");
+
+  const mobileSidebarNav = user
+    ? `
+      <div class="mobile-sidebar-meta">
+        <span class="user-avatar">${escapeHtml(userInitials)}</span>
+        <strong>${escapeHtml(user.displayName)}</strong>
+      </div>
+      ${mobileNavLinks}
+      <form method="post" action="/logout">
+        <input type="hidden" name="_csrf" value="${escapeHtml(options.csrfToken ?? "")}" />
+        <button type="submit" class="ghost">Abmelden</button>
+      </form>
+    `
+    : `
+      ${mobileNavLinks}
+      <a href="/login">Anmelden</a>
+    `;
 
   const primaryAction = user
     ? pathname === "/new"
@@ -252,7 +282,7 @@ export const renderLayout = (options: LayoutOptions): string => {
         isSearchPage ? 'aria-current="page"' : ""
       }>
         <svg class="search-shortcut-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M11 4a7 7 0 1 0 4.9 12l4.4 4.4a1 1 0 0 0 1.4-1.4l-4.4-4.4A7 7 0 0 0 11 4Z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
         </svg>
       </a>`
     : "";
@@ -263,14 +293,27 @@ export const renderLayout = (options: LayoutOptions): string => {
   ].join("\n");
 
   const optionScripts = options.scripts ?? [];
-  const scripts = [...(user || publicReadEnabled ? ["/search-suggest.js?v=3", "/cmd-palette.js?v=2"] : []), "/js/main.js?v=3", ...optionScripts]
+  const scripts = [
+    ...(user || publicReadEnabled ? ["/search-suggest.js?v=3", "/cmd-palette.js?v=2"] : []),
+    "/js/dashboard.js?v=1",
+    "/js/main.js?v=4",
+    ...optionScripts
+  ]
     .filter((scriptPath) => scriptPath.startsWith("/"))
     .map((scriptPath) => `<script src="${escapeHtml(scriptPath)}" defer></script>`)
     .join("\n");
 
   const htmlTheme = user?.theme && user.theme !== "system" ? ` data-theme="${escapeHtml(user.theme)}"` : "";
 
-  const mainClass = ["container", options.mainClassName ?? ""].filter((entry) => entry.trim().length > 0).join(" ");
+  const isDashboardLayout = /\bdashboard-main\b/.test(options.mainClassName ?? "");
+  const isEditorLayout = /\beditor-main\b/.test(options.mainClassName ?? "");
+  const mainClass = isDashboardLayout || isEditorLayout
+    ? (options.mainClassName ?? (isDashboardLayout ? "dashboard-main" : "editor-main")).trim()
+    : ["container", options.mainClassName ?? ""].filter((entry) => entry.trim().length > 0).join(" ");
+  const bodyClasses = [isDashboardLayout ? "dashboard-page" : "", isEditorLayout ? "editor-page" : ""]
+    .filter((entry) => entry.length > 0)
+    .join(" ");
+  const bodyClass = bodyClasses.length > 0 ? ` class="${bodyClasses}"` : "";
 
   return `<!doctype html>
 <html lang="de"${htmlTheme}>
@@ -287,15 +330,12 @@ export const renderLayout = (options: LayoutOptions): string => {
     <meta property="og:description" content="${description}" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="${escapeHtml(canonicalHref)}" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>${_themeCss}</style>
-    <link rel="preload" href="/css/components.css?v=15" as="style" />
-    <link rel="stylesheet" href="/css/components.css?v=15" />
+    <link rel="preload" href="/css/components.css?v=21" as="style" />
+    <link rel="stylesheet" href="/css/components.css?v=21" />
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"${escapeHtml(siteTitle)}","url":"${escapeHtml((config.publicBaseUrl || "").replace(/\/+$/, "") || "/")}"}</script>
   </head>
-  <body>
+  <body${bodyClass}>
     <a href="#main-content" class="skip-to-main">Zum Hauptinhalt springen</a>
     ${
       options.hideHeader
@@ -370,7 +410,7 @@ export const renderLayout = (options: LayoutOptions): string => {
     </footer>`
     }
     <script src="/utils.js?v=1" defer></script>
-    <script src="/theme-toggle.js?v=3" defer></script>
+    <script src="/theme-toggle.js?v=5" defer></script>
     ${scripts}
   </body>
 </html>`;

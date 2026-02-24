@@ -4,7 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { persistValidatedImageUpload, resolveDeclaredImageType, validateImageFileMagic } from "../src/lib/uploadImageValidation.ts";
-import { resolveUploadAccess } from "../src/lib/uploadAccessPolicy.ts";
+import { resolveUploadAccess, resolveUploadFileAccess } from "../src/lib/uploadAccessPolicy.ts";
 import { getUploadCacheControl } from "../src/lib/uploadResponsePolicy.ts";
 
 const makeTempDir = async (): Promise<string> => {
@@ -31,6 +31,36 @@ describe("upload image validation", () => {
   it("returns mode-aware cache policy for uploads", () => {
     expect(getUploadCacheControl(false)).toBe("private, no-store");
     expect(getUploadCacheControl(true)).toBe("public, max-age=300, must-revalidate");
+  });
+
+  it("denies guest access for scoped upload files even in public-read mode", () => {
+    const decision = resolveUploadFileAccess({
+      isAuthenticated: false,
+      publicReadEnabled: true,
+      hasScopedRule: true,
+      userCanAccessScopedFile: false
+    });
+    expect(decision).toEqual({ allowed: false, statusCode: 401 });
+  });
+
+  it("returns 403 for authenticated users without scoped upload permission", () => {
+    const decision = resolveUploadFileAccess({
+      isAuthenticated: true,
+      publicReadEnabled: true,
+      hasScopedRule: true,
+      userCanAccessScopedFile: false
+    });
+    expect(decision).toEqual({ allowed: false, statusCode: 403 });
+  });
+
+  it("allows scoped upload access when page permission is granted", () => {
+    const decision = resolveUploadFileAccess({
+      isAuthenticated: false,
+      publicReadEnabled: false,
+      hasScopedRule: true,
+      userCanAccessScopedFile: true
+    });
+    expect(decision).toEqual({ allowed: true });
   });
 
   it("accepts valid magic bytes for supported image types", async () => {
