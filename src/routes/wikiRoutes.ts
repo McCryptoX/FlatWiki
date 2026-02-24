@@ -95,10 +95,129 @@ const UPLOAD_EXTENSION_TO_MIME: Record<string, string> = {
   png: "image/png",
   webp: "image/webp"
 };
+const UPLOAD_STAGING_PREFIX = "tmp";
+const STAGED_UPLOAD_TTL_MS = 48 * 60 * 60 * 1000;
+const DRAFT_ID_PATTERN = /^[a-z0-9]{12,64}$/;
+let lastStagedUploadCleanupAtMs = 0;
 
 const resolveMimeTypeByUploadName = (fileName: string): string => {
   const extension = path.extname(fileName).replace(/^\./, "").trim().toLowerCase();
   return UPLOAD_EXTENSION_TO_MIME[extension] ?? "application/octet-stream";
+};
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const createDraftId = (): string => randomUUID().replaceAll("-", "");
+
+const normalizeDraftId = (value: unknown): string => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return DRAFT_ID_PATTERN.test(normalized) ? normalized : "";
+};
+
+const buildUploadUrl = (relativePath: string): string => {
+  const segments = relativePath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  return `/uploads/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+};
+
+const resolveDraftUploadSubDir = (draftId: string): string => `${UPLOAD_STAGING_PREFIX}/${draftId}`;
+
+const cleanupStagedUploads = async (): Promise<void> => {
+  const now = Date.now();
+  if (now - lastStagedUploadCleanupAtMs < 60 * 60 * 1000) return;
+  lastStagedUploadCleanupAtMs = now;
+
+  const tmpRoot = safeResolve(config.uploadDir, UPLOAD_STAGING_PREFIX);
+  let entries: Array<{ name: string; isDirectory: () => boolean }>;
+  try {
+    entries = (await fs.readdir(tmpRoot, { withFileTypes: true })) as Array<{ name: string; isDirectory: () => boolean }>;
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!DRAFT_ID_PATTERN.test(entry.name.toLowerCase())) continue;
+    const dirPath = safeResolve(tmpRoot, entry.name);
+    try {
+      const stats = await fs.stat(dirPath);
+      if (!stats.isDirectory()) continue;
+      if (now - stats.mtimeMs < STAGED_UPLOAD_TTL_MS) continue;
+      await fs.rm(dirPath, { recursive: true, force: true });
+    } catch {
+      // ignore broken staging directories
+    }
+  }
+};
+
+const removeStagedDraftUploads = async (draftId: string): Promise<void> => {
+  if (!draftId) return;
+  const draftDir = safeResolve(config.uploadDir, resolveDraftUploadSubDir(draftId));
+  await fs.rm(draftDir, { recursive: true, force: true }).catch(() => {});
+};
+
+const rewriteUploadUrlReferences = (markdown: string, replacements: Map<string, string>): string => {
+  let next = markdown;
+  for (const [fromRelative, toRelative] of replacements.entries()) {
+    const fromEncoded = buildUploadUrl(fromRelative);
+    const toEncoded = buildUploadUrl(toRelative);
+    const fromPlain = `/uploads/${fromRelative}`;
+    const toPlain = `/uploads/${toRelative}`;
+    next = next.replace(new RegExp(escapeRegExp(fromEncoded), "g"), toEncoded);
+    next = next.replace(new RegExp(escapeRegExp(fromPlain), "g"), toPlain);
+  }
+  return next;
+};
+
+const commitStagedUploadsForDraft = async (input: {
+  draftId: string;
+  markdown: string;
+  finalUploadSubDir: string;
+}): Promise<{ markdown: string; moved: number }> => {
+  const draftId = normalizeDraftId(input.draftId);
+  if (!draftId) return { markdown: input.markdown, moved: 0 };
+
+  const stagingPrefix = `${resolveDraftUploadSubDir(draftId)}/`;
+  const refs = Array.from(new Set(extractUploadReferencesFromMarkdown(input.markdown))).filter((ref) => ref.startsWith(stagingPrefix));
+  if (refs.length < 1) return { markdown: input.markdown, moved: 0 };
+
+  const finalSubDir = input.finalUploadSubDir.trim() || "allgemein";
+  await ensureDir(safeResolve(config.uploadDir, finalSubDir));
+  const replacements = new Map<string, string>();
+  let moved = 0;
+
+  for (const ref of refs) {
+    const family = await listExistingDerivativeFamily(ref);
+    if (family.length < 1) continue;
+
+    const extension = path.extname(ref).replace(/^\./, "").trim().toLowerCase() || "img";
+    const finalStoredName = `${Date.now()}-${randomUUID().replaceAll("-", "")}.${extension}`;
+    const finalOriginalRelative = `${finalSubDir}/${finalStoredName}`;
+    const finalFamily = deriveUploadPaths(finalOriginalRelative);
+
+    for (const sourceRelative of family) {
+      const sourceAbsolute = safeResolve(config.uploadDir, sourceRelative);
+      const sourceExt = path.extname(sourceRelative).replace(/^\./, "").trim().toLowerCase();
+      const targetRelative =
+        sourceExt === "avif" ? finalFamily.avifPath : sourceExt === "webp" ? finalFamily.webpPath : finalOriginalRelative;
+      const targetAbsolute = safeResolve(config.uploadDir, targetRelative);
+      await ensureDir(path.dirname(targetAbsolute));
+      await fs.rename(sourceAbsolute, targetAbsolute);
+      await removeUploadSecurityByFile(sourceRelative);
+    }
+
+    replacements.set(ref, finalOriginalRelative);
+    moved += 1;
+  }
+
+  return {
+    markdown: rewriteUploadUrlReferences(input.markdown, replacements),
+    moved
+  };
 };
 
 const listExistingDerivativeFamily = async (relativePath: string): Promise<string[]> => {
@@ -822,6 +941,7 @@ const renderTrendingTopics = (
 const renderEditorForm = (params: {
   mode: "new" | "edit";
   action: string;
+  draftId: string;
   slug: string;
   slugAuto?: boolean;
   title: string;
@@ -871,7 +991,9 @@ const renderEditorForm = (params: {
       params.csrfToken
     )}" data-page-slug="${escapeHtml(params.slug)}" data-editor-mode="${params.mode}" data-security-profile="${escapeHtml(
       params.securityProfile
-    )}" data-ui-mode="${escapeHtml(params.uiMode)}" data-initial-template-id="${escapeHtml(params.selectedTemplateId ?? "")}">
+    )}" data-ui-mode="${escapeHtml(params.uiMode)}" data-initial-template-id="${escapeHtml(
+      params.selectedTemplateId ?? ""
+    )}" data-draft-id="${escapeHtml(params.draftId)}">
       <h1>${params.mode === "new" ? "Neue Seite" : "Seite bearbeiten"}</h1>
       <div class="editor-chrome">
         <header class="editor-topbar">
@@ -920,6 +1042,7 @@ const renderEditorForm = (params: {
 
             <form id="${editorFormId}" method="post" action="${escapeHtml(params.action)}" class="editor-main-form">
               <input type="hidden" name="_csrf" value="${escapeHtml(params.csrfToken)}" />
+              <input type="hidden" name="draftId" value="${escapeHtml(params.draftId)}" />
               ${params.lastKnownUpdatedAt ? `<input type="hidden" name="lastKnownUpdatedAt" value="${escapeHtml(params.lastKnownUpdatedAt)}" />` : ""}
               ${params.lastKnownConflictToken ? `<input type="hidden" name="lastKnownConflictToken" value="${escapeHtml(params.lastKnownConflictToken)}" />` : ""}
 
@@ -1130,6 +1253,7 @@ const buildEditorRedirectQuery = (params: {
   tags: string;
   content: string;
   categoryId: string;
+  draftId?: string;
   securityProfile: SecurityProfile;
   visibility: "all" | "restricted";
   allowedUsers: string[];
@@ -1145,6 +1269,9 @@ const buildEditorRedirectQuery = (params: {
   query.set("tags", params.tags);
   query.set("content", params.content);
   query.set("categoryId", params.categoryId);
+  if (params.draftId && normalizeDraftId(params.draftId)) {
+    query.set("draftId", normalizeDraftId(params.draftId));
+  }
   query.set("securityProfile", params.securityProfile);
   query.set("visibility", params.visibility);
   query.set("allowedUsers", params.allowedUsers.join(","));
@@ -2005,6 +2132,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .map((user) => ({ username: user.username, displayName: user.displayName }));
 
     const draftTitle = readSingle(query.title);
+    const draftId = normalizeDraftId(readSingle(query.draftId)) || createDraftId();
     const draftSlug = readSingle(query.slug) || slugifyTitle(draftTitle);
     const draftTags = readSingle(query.tags);
     const draftContent = readSingle(query.content);
@@ -2044,6 +2172,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const body = renderEditorForm({
       mode: "new",
       action: "/new",
+      draftId,
       slug: draftSlug,
       slugAuto: readSingle(query.slug).trim().length === 0,
       title: draftTitle,
@@ -2087,7 +2216,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         hideHeaderSearch: true,
         mainClassName: "editor-stage",
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=29"]
+        scripts: ["/wiki-ui.js?v=30"]
       })
     );
   });
@@ -2107,6 +2236,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
+    const draftId = normalizeDraftId(readSingle(body.draftId)) || createDraftId();
 
     const securityProfile = resolveSecurityProfileForUiMode({
       requested: normalizeSecurityProfileValue(readSingle(body.securityProfile)),
@@ -2129,6 +2259,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        draftId,
         securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers: normalizeUsernames(readMany(body.allowedUsers)),
@@ -2158,6 +2289,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        draftId,
         securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
@@ -2177,6 +2309,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           tags: tagsRaw,
           content,
           categoryId: selectedCategoryId,
+          draftId,
           securityProfile: normalizedSettings.securityProfile,
           visibility,
           allowedUsers,
@@ -2195,6 +2328,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           tags: tagsRaw,
           content,
           categoryId: selectedCategoryId,
+          draftId,
           securityProfile: normalizedSettings.securityProfile,
           visibility,
           allowedUsers,
@@ -2206,16 +2340,25 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       slug = resolvedSlug;
     }
 
+    const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
+    const stagedCommit = await commitStagedUploadsForDraft({
+      draftId,
+      markdown: content,
+      finalUploadSubDir: category.uploadFolder.trim() || "allgemein"
+    });
+    const contentForSave = stagedCommit.markdown;
+
     if (normalizedSettings.encrypted) {
-      const syncResult = await syncUploadCryptoForMarkdown({ slug, markdown: content, target: "encrypt" });
+      const syncResult = await syncUploadCryptoForMarkdown({ slug, markdown: contentForSave, target: "encrypt" });
       if (!syncResult.ok) {
         const query = buildEditorRedirectQuery({
           error: `Bilder konnten nicht verschlüsselt werden: ${syncResult.error}`,
           title,
           slug,
           tags: tagsRaw,
-          content,
+          content: contentForSave,
           categoryId: selectedCategoryId,
+          draftId,
           securityProfile: normalizedSettings.securityProfile,
           visibility,
           allowedUsers,
@@ -2236,7 +2379,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       allowedGroups,
       encrypted: normalizedSettings.encrypted,
       tags,
-      content,
+      content: contentForSave,
       updatedBy: request.currentUser?.username ?? "unknown"
     });
 
@@ -2246,8 +2389,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         title,
         slug,
         tags: tagsRaw,
-        content,
+        content: contentForSave,
         categoryId: selectedCategoryId,
+        draftId,
         securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
@@ -2269,6 +2413,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     });
     const slugAdjusted = !slugWasExplicitlyProvided && slug !== requestedAutoSlug;
     const notice = slugAdjusted ? `Seitenadresse '${requestedAutoSlug}' war bereits belegt und wurde auf '${slug}' angepasst.` : "";
+    await removeStagedDraftUploads(draftId);
     return reply.redirect(
       `/wiki/${encodeURIComponent(slug)}${notice ? `?notice=${encodeURIComponent(notice)}` : ""}`
     );
@@ -2317,6 +2462,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .map((user) => ({ username: user.username, displayName: user.displayName }));
 
     const query = asObject(request.query);
+    const draftId = normalizeDraftId(readSingle(query.draftId)) || createDraftId();
     const title = readSingle(query.title) || page.title;
     const tags = readSingle(query.tags) || page.tags.join(", ");
     const content = readSingle(query.content) || page.content;
@@ -2352,6 +2498,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const body = renderEditorForm({
       mode: "edit",
       action: `/wiki/${encodeURIComponent(page.slug)}/edit`,
+      draftId,
       slug: page.slug,
       slugAuto: false,
       title,
@@ -2390,7 +2537,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         hideHeaderSearch: true,
         mainClassName: "editor-stage",
         error: readSingle(query.error),
-        scripts: ["/wiki-ui.js?v=29"]
+        scripts: ["/wiki-ui.js?v=30"]
       })
     );
   });
@@ -2399,15 +2546,17 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
     const csrfToken = request.headers["x-csrf-token"];
     const csrfValue = Array.isArray(csrfToken) ? csrfToken[0] ?? "" : csrfToken ?? "";
     const query = asObject(request.query);
+    const draftId = normalizeDraftId(readSingle(query.draftId));
+    const useStaging = draftId.length > 0;
     const selectedCategoryId = readSingle(query.categoryId);
     const pageSlug = readSingle(query.slug).trim().toLowerCase();
     const securityProfileContext = normalizeSecurityProfileValue(readSingle(query.securityProfile));
     const encryptedContext = ["1", "true", "on"].includes(readSingle(query.encrypted).trim().toLowerCase());
     const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
-    const uploadSubDir = category.uploadFolder.trim() || "allgemein";
+    const uploadSubDir = useStaging ? resolveDraftUploadSubDir(draftId) : category.uploadFolder.trim() || "allgemein";
     const uploadTargetDir = safeResolve(config.uploadDir, uploadSubDir);
     const existingPage = isValidSlug(pageSlug) ? await getPage(pageSlug) : null;
-    const shouldEncryptUpload = securityProfileContext !== "standard" || encryptedContext || existingPage?.encrypted === true;
+    const shouldEncryptUpload = !useStaging && (securityProfileContext !== "standard" || encryptedContext || existingPage?.encrypted === true);
 
     if (!verifySessionCsrfToken(request, csrfValue)) {
       return reply.code(400).send({ ok: false, error: "Ungültiges CSRF-Token." });
@@ -2422,6 +2571,10 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
 
     if (!request.isMultipart()) {
       return reply.code(400).send({ ok: false, error: "Erwarteter Multipart-Upload." });
+    }
+
+    if (useStaging) {
+      await cleanupStagedUploads();
     }
 
     await ensureDir(uploadTargetDir);
@@ -2514,7 +2667,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           }
         }
 
-        const url = `/uploads/${encodeURIComponent(uploadSubDir)}/${storedName}`;
+        const url = buildUploadUrl(relativePath);
         const alt = escapeMarkdownText(sanitizeAltText(part.filename ?? "Bild"));
 
         uploaded.push({
@@ -2607,6 +2760,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0);
     const content = readSingle(body.content);
+    const draftId = normalizeDraftId(readSingle(body.draftId)) || createDraftId();
 
     // Konflikterkennung: Prüfen ob die Seite seit dem Öffnen des Editors verändert wurde.
     const lastKnownUpdatedAt = readSingle(body.lastKnownUpdatedAt).trim();
@@ -2623,6 +2777,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       const conflictBody = renderEditorForm({
         mode: "edit",
         action: `/wiki/${encodeURIComponent(normalizedSlug)}/edit`,
+        draftId,
         slug: normalizedSlug,
         slugAuto: false,
         title,
@@ -2655,7 +2810,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           user: request.currentUser,
           csrfToken: request.csrfToken,
           error: `Konflikt: Diese Seite wurde zwischenzeitlich von „${escapeHtml(existing.updatedBy)}" am ${formatDate(existing.updatedAt)} geändert. Deine Änderungen sind unten erhalten – bitte prüfen und erneut speichern.`,
-          scripts: ["/wiki-ui.js?v=29"]
+          scripts: ["/wiki-ui.js?v=30"]
         })
       );
     }
@@ -2694,6 +2849,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         tags: tagsRaw,
         content,
         categoryId: selectedCategoryId,
+        draftId,
         securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
@@ -2704,17 +2860,25 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       return reply.redirect(`/wiki/${encodeURIComponent(normalizedSlug)}/edit?${query}`);
     }
 
-    const switchedToEncrypted = !existing.encrypted && normalizedSettings.encrypted;
+    const category = (await findCategoryById(selectedCategoryId)) ?? (await getDefaultCategory());
+    const stagedCommit = await commitStagedUploadsForDraft({
+      draftId,
+      markdown: content,
+      finalUploadSubDir: category.uploadFolder.trim() || "allgemein"
+    });
+    const contentForSave = stagedCommit.markdown;
+
     const switchedToUnencrypted = existing.encrypted && !normalizedSettings.encrypted;
-    if (switchedToEncrypted) {
-      const syncResult = await syncUploadCryptoForMarkdown({ slug: normalizedSlug, markdown: content, target: "encrypt" });
+    if (normalizedSettings.encrypted) {
+      const syncResult = await syncUploadCryptoForMarkdown({ slug: normalizedSlug, markdown: contentForSave, target: "encrypt" });
       if (!syncResult.ok) {
         const query = buildEditorRedirectQuery({
           error: `Bilder konnten nicht verschlüsselt werden: ${syncResult.error}`,
           title,
           tags: tagsRaw,
-          content,
+          content: contentForSave,
           categoryId: selectedCategoryId,
+          draftId,
           securityProfile: normalizedSettings.securityProfile,
           visibility,
           allowedUsers,
@@ -2725,14 +2889,15 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       }
     }
     if (switchedToUnencrypted) {
-      const syncResult = await syncUploadCryptoForMarkdown({ slug: normalizedSlug, markdown: content, target: "decrypt" });
+      const syncResult = await syncUploadCryptoForMarkdown({ slug: normalizedSlug, markdown: contentForSave, target: "decrypt" });
       if (!syncResult.ok) {
         const query = buildEditorRedirectQuery({
           error: `Bilder konnten nicht entschlüsselt werden: ${syncResult.error}`,
           title,
           tags: tagsRaw,
-          content,
+          content: contentForSave,
           categoryId: selectedCategoryId,
+          draftId,
           securityProfile: normalizedSettings.securityProfile,
           visibility,
           allowedUsers,
@@ -2753,7 +2918,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       allowedGroups,
       encrypted: normalizedSettings.encrypted,
       tags,
-      content,
+      content: contentForSave,
       updatedBy: request.currentUser?.username ?? "unknown"
     });
 
@@ -2762,8 +2927,9 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         error: result.error ?? "Speichern fehlgeschlagen",
         title,
         tags: tagsRaw,
-        content,
+        content: contentForSave,
         categoryId: selectedCategoryId,
+        draftId,
         securityProfile: normalizedSettings.securityProfile,
         visibility,
         allowedUsers,
@@ -2787,6 +2953,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
       actorId: request.currentUser?.id,
       targetId: normalizedSlug
     });
+    await removeStagedDraftUploads(draftId);
 
     await notifyWatchersForPageEvent({
       slug: normalizedSlug,

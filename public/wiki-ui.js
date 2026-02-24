@@ -163,6 +163,7 @@
     const contentTextarea = editorShell.querySelector('[data-editor-textarea], textarea[name="content"]');
     const titleInput = editorShell.querySelector('input[name="title"][data-title-input], input[name="title"]');
     const slugInput = editorShell.querySelector('input[name="slug"][data-slug-input], input[name="slug"]');
+    const draftIdInput = editorShell.querySelector('input[name="draftId"]');
     const tagsInput = editorShell.querySelector('input[name="tags"]');
     const tagsChipInput = editorShell.querySelector("[data-tags-chip-input]");
     const tagsList = editorShell.querySelector("[data-tags-list]");
@@ -246,6 +247,7 @@
     const csrfToken = editorShell.dataset.csrf || "";
     const previewEndpoint = editorShell.dataset.previewEndpoint || "/api/markdown/preview";
     const pageSlug = (editorShell.dataset.pageSlug || "").trim().toLowerCase();
+    const initialDraftId = (editorShell.dataset.draftId || "").trim().toLowerCase();
     const initialTemplateId = (editorShell.dataset.initialTemplateId || "").trim();
     const uiMode = String(editorShell.dataset.uiMode || "advanced").trim().toLowerCase() === "simple" ? "simple" : "advanced";
     const uploadDisabledMessage = "Bild-Upload ist derzeit nicht verfügbar.";
@@ -842,6 +844,11 @@
             : pageSlug;
         if (currentSlug.length > 0) {
           params.set("slug", currentSlug);
+        }
+        const currentDraftId =
+          draftIdInput instanceof HTMLInputElement ? String(draftIdInput.value || "").trim().toLowerCase() : initialDraftId;
+        if (currentDraftId.length > 0) {
+          params.set("draftId", currentDraftId);
         }
         const queryString = params.toString();
         if (queryString.length > 0) {
