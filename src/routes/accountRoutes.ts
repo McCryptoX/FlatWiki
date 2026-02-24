@@ -32,138 +32,170 @@ export const registerAccountRoutes = async (app: FastifyInstance): Promise<void>
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
+    const inputClass =
+      "bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500";
+    const secondaryButtonClass =
+      "bg-slate-900 hover:bg-slate-800 text-slate-200 px-4 py-2 rounded-lg text-sm font-medium border border-slate-800 transition-colors";
+    const primaryButtonClass =
+      "bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm shadow-indigo-500/20";
+    const tableWrapperClass = "bg-slate-900/60 border border-slate-800/70 rounded-2xl shadow-sm overflow-hidden";
+    const tableClass = "w-full text-left text-sm text-slate-300 whitespace-nowrap";
+
     const myArticlesSection =
       myArticles.length > 0
         ? `
-          <div class="table-wrap">
-            <table>
-              <thead>
+          <div class="${tableWrapperClass}">
+            <div class="overflow-x-auto">
+            <table class="${tableClass}">
+              <thead class="bg-slate-950/50 text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 <tr>
-                  <th>Titel</th>
-                  <th>Slug</th>
-                  <th>Erstellt</th>
-                  <th>Zuletzt geändert</th>
+                  <th class="px-5 py-4">Titel</th>
+                  <th class="px-5 py-4">Slug</th>
+                  <th class="px-5 py-4">Erstellt</th>
+                  <th class="px-5 py-4">Zuletzt geändert</th>
                 </tr>
               </thead>
               <tbody>
                 ${myArticles
                   .map(
                     (article) => `
-                  <tr>
-                    <td><a href="/wiki/${encodeURIComponent(article.slug)}">${escapeHtml(article.title)}</a></td>
-                    <td><code>${escapeHtml(article.slug)}</code></td>
-                    <td>${escapeHtml(formatDate(article.createdAt))}</td>
-                    <td>${escapeHtml(formatDate(article.updatedAt))}</td>
+                  <tr class="border-t border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                    <td class="px-5 py-4"><a href="/wiki/${encodeURIComponent(article.slug)}">${escapeHtml(article.title)}</a></td>
+                    <td class="px-5 py-4"><code>${escapeHtml(article.slug)}</code></td>
+                    <td class="px-5 py-4">${escapeHtml(formatDate(article.createdAt))}</td>
+                    <td class="px-5 py-4">${escapeHtml(formatDate(article.updatedAt))}</td>
                   </tr>
                 `
                   )
                   .join("")}
               </tbody>
             </table>
+            </div>
           </div>
         `
-        : '<p class="empty">Du hast bisher keine eigenen Artikel erstellt.</p>';
+        : '<p class="text-sm text-slate-400">Du hast bisher keine eigenen Artikel erstellt.</p>';
 
     const body = `
-      <section class="content-wrap">
-        <h1>Mein Konto</h1>
-        <div class="profile-grid">
-          <div>
-            <strong>Benutzername</strong>
-            <p>${escapeHtml(user.username)}</p>
+      <section class="max-w-7xl mx-auto p-6 md:p-8 space-y-6 text-slate-100">
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6">
+          <h1 class="text-2xl font-semibold text-slate-100 mb-1">Mein Konto</h1>
+          <p class="text-sm text-slate-400 mb-4">Übersicht deiner Stammdaten und Profileinstellungen.</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div class="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+              <strong class="block mb-1 text-slate-300">Benutzername</strong>
+              <p>${escapeHtml(user.username)}</p>
+            </div>
+            <div class="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+              <strong class="block mb-1 text-slate-300">Anzeigename</strong>
+              <p>${escapeHtml(user.displayName)}</p>
+            </div>
+            <div class="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+              <strong class="block mb-1 text-slate-300">E-Mail</strong>
+              <p>${user.email ? escapeHtml(user.email) : '<span class="text-slate-500">Keine E-Mail hinterlegt</span>'}</p>
+            </div>
+            <div class="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+              <strong class="block mb-1 text-slate-300">Rolle</strong>
+              <p>${escapeHtml(user.role)}</p>
+            </div>
+            <div class="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+              <strong class="block mb-1 text-slate-300">Erstellt</strong>
+              <p>${escapeHtml(formatDate(user.createdAt))}</p>
+            </div>
           </div>
-          <div>
-            <strong>Anzeigename</strong>
-            <p>${escapeHtml(user.displayName)}</p>
+        </section>
+
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">Passwort</h2>
+          <p class="text-sm text-slate-400 mb-4">Sicherheitsrelevante Kontodaten aktualisieren.</p>
+          <form method="post" action="/account/password" class="grid grid-cols-1 gap-3">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label class="text-sm text-slate-300">Aktuelles Passwort
+              <input class="${inputClass}" type="password" name="oldPassword" required autocomplete="current-password" />
+            </label>
+            <label class="text-sm text-slate-300">Neues Passwort
+              <input class="${inputClass}" type="password" name="newPassword" required minlength="12" autocomplete="new-password" />
+            </label>
+            <label class="text-sm text-slate-300">Neues Passwort wiederholen
+              <input class="${inputClass}" type="password" name="confirmPassword" required minlength="12" autocomplete="new-password" />
+            </label>
+            <div class="mt-4 flex justify-end gap-2">
+              <button class="${primaryButtonClass}" type="submit">Passwort aktualisieren</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">E-Mail</h2>
+          <p class="text-sm text-slate-400 mb-4">Wird für Benachrichtigungen per E-Mail genutzt. Optional.</p>
+          <form method="post" action="/account/email" class="grid grid-cols-1 gap-3">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label class="text-sm text-slate-300">E-Mail-Adresse
+              <input class="${inputClass}" type="email" name="email" value="${escapeHtml(user.email ?? "")}" autocomplete="email" placeholder="du@example.com" />
+            </label>
+            <div class="mt-4 flex justify-end gap-2">
+              <button class="${primaryButtonClass}" type="submit">E-Mail aktualisieren</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6 space-y-4">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">Beobachtete Seiten</h2>
+          <p class="text-sm text-slate-400">${watchedPages.length} Seiten auf deiner Watchlist.</p>
+          ${
+            watchedPages.length < 1
+              ? '<p class="text-sm text-slate-400">Noch keine beobachteten Seiten. Öffne einen Artikel und klicke auf „Beobachten“.</p>'
+              : `
+                <div class="${tableWrapperClass}">
+                  <div class="overflow-x-auto">
+                  <table class="${tableClass}">
+                    <thead class="bg-slate-950/50 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <tr>
+                        <th class="px-5 py-4">Titel</th>
+                        <th class="px-5 py-4">Kategorie</th>
+                        <th class="px-5 py-4">Zuletzt geändert</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${watchedPages
+                        .map(
+                          (page) => `
+                            <tr class="border-t border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                              <td class="px-5 py-4"><a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a></td>
+                              <td class="px-5 py-4">${escapeHtml(page.categoryName)}</td>
+                              <td class="px-5 py-4">${escapeHtml(formatDate(page.updatedAt))}</td>
+                            </tr>
+                          `
+                        )
+                        .join("")}
+                    </tbody>
+                  </table>
+                  </div>
+                </div>
+              `
+          }
+        </section>
+
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">Benachrichtigungen</h2>
+          <p class="text-sm text-slate-400 mb-4">Erwähnungen, Kommentare und Updates beobachteter Seiten findest du in deiner Inbox.</p>
+          <div class="mt-4 flex justify-end gap-2">
+            <a class="${secondaryButtonClass}" href="/notifications">Inbox öffnen</a>
           </div>
-          <div>
-            <strong>E-Mail</strong>
-            <p>${user.email ? escapeHtml(user.email) : '<span class="muted-note">Keine E-Mail hinterlegt</span>'}</p>
+        </section>
+
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">Datenexport (Datenschutz)</h2>
+          <p class="text-sm text-slate-400 mb-4">Du kannst deine gespeicherten Kontodaten inklusive eigener Artikelübersicht und Markdown-Speicherdump als JSON exportieren.</p>
+          <div class="mt-4 flex justify-end gap-2">
+            <a class="${secondaryButtonClass}" href="/account/export">Meine Daten herunterladen</a>
           </div>
-          <div>
-            <strong>Rolle</strong>
-            <p>${escapeHtml(user.role)}</p>
-          </div>
-          <div>
-            <strong>Erstellt</strong>
-            <p>${escapeHtml(formatDate(user.createdAt))}</p>
-          </div>
-        </div>
+        </section>
 
-        <h2>Passwort ändern</h2>
-        <form method="post" action="/account/password" class="stack">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Aktuelles Passwort
-            <input type="password" name="oldPassword" required autocomplete="current-password" />
-          </label>
-          <label>Neues Passwort
-            <input type="password" name="newPassword" required minlength="12" autocomplete="new-password" />
-          </label>
-          <label>Neues Passwort wiederholen
-            <input type="password" name="confirmPassword" required minlength="12" autocomplete="new-password" />
-          </label>
-          <button type="submit">Passwort aktualisieren</button>
-        </form>
-
-        <hr />
-        <h2>E-Mail-Adresse</h2>
-        <p class="muted-note">Wird für Benachrichtigungen per E-Mail genutzt. Optional.</p>
-        <form method="post" action="/account/email" class="stack">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>E-Mail-Adresse
-            <input type="email" name="email" value="${escapeHtml(user.email ?? "")}" autocomplete="email" placeholder="du@example.com" />
-          </label>
-          <button type="submit">E-Mail aktualisieren</button>
-        </form>
-
-        <hr />
-        <h2>Beobachtete Seiten</h2>
-        <p>${watchedPages.length} Seiten auf deiner Watchlist.</p>
-        ${
-          watchedPages.length < 1
-            ? '<p class="empty">Noch keine beobachteten Seiten. Öffne einen Artikel und klicke auf „Beobachten“.</p>'
-            : `
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Titel</th>
-                      <th>Kategorie</th>
-                      <th>Zuletzt geändert</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${watchedPages
-                      .map(
-                        (page) => `
-                          <tr>
-                            <td><a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a></td>
-                            <td>${escapeHtml(page.categoryName)}</td>
-                            <td>${escapeHtml(formatDate(page.updatedAt))}</td>
-                          </tr>
-                        `
-                      )
-                      .join("")}
-                  </tbody>
-                </table>
-              </div>
-            `
-        }
-
-        <hr />
-        <h2>Benachrichtigungen</h2>
-        <p>Erwähnungen, Kommentare und Updates beobachteter Seiten findest du in deiner Inbox.</p>
-        <a class="button secondary" href="/notifications">Inbox öffnen</a>
-
-        <hr />
-        <h2>Datenexport (Datenschutz)</h2>
-        <p>Du kannst deine gespeicherten Kontodaten inklusive eigener Artikelübersicht und Markdown-Speicherdump als JSON exportieren.</p>
-        <a class="button secondary" href="/account/export">Meine Daten herunterladen</a>
-
-        <hr />
-        <h2>Meine Artikel</h2>
-        <p>${myArticles.length} Artikel von dir erstellt. (Kriterium: <code>createdBy</code>, bei Altseiten Fallback auf <code>updatedBy</code>)</p>
-        ${myArticlesSection}
+        <section class="bg-slate-900/60 border border-slate-800/70 rounded-3xl p-6 space-y-4">
+          <h2 class="text-xl font-semibold text-slate-100 mb-1">Meine Artikel</h2>
+          <p class="text-sm text-slate-400">${myArticles.length} Artikel von dir erstellt. (Kriterium: <code>createdBy</code>, bei Altseiten Fallback auf <code>updatedBy</code>)</p>
+          ${myArticlesSection}
+        </section>
       </section>
     `;
 

@@ -859,7 +859,6 @@ const renderSearchResultList = (
         .map((page) => {
           const metaBits = [
             formatDate(page.updatedAt),
-            page.categoryName,
             page.updatedBy && page.updatedBy !== "unknown" ? `Autor: ${page.updatedBy}` : "",
             page.visibility === "restricted" ? "Eingeschränkter Zugriff" : "Öffentlich im Team",
             page.encrypted ? "Verschlüsselt" : ""
@@ -878,7 +877,7 @@ const renderSearchResultList = (
             <article class="search-hit-card">
               <h3><a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a></h3>
               <p class="card-excerpt">${escapeHtml(page.excerpt || "Keine Vorschau verfügbar.")}</p>
-              <p class="search-hit-meta">${escapeHtml(metaBits.join(" • "))}</p>
+              <p class="search-hit-meta"><span class="meta-badge">${escapeHtml(page.categoryName)}</span> <span>${escapeHtml(metaBits.join(" • "))}</span></p>
               ${tags ? `<div class="card-tags">${tags}</div>` : ""}
             </article>
           `;
@@ -898,11 +897,16 @@ const renderRecentPages = (pages: WikiPageSummary[]): string => {
       ${pages
         .map((page) => {
           const updatedBy = page.updatedBy && page.updatedBy !== "unknown" ? `von ${page.updatedBy}` : "";
-          const metaBits = [page.categoryName, formatDate(page.updatedAt), updatedBy].filter((entry) => entry.length > 0);
+          const metaBits = [formatDate(page.updatedAt), updatedBy].filter((entry) => entry.length > 0);
           return `
             <li>
-              <a href="/wiki/${encodeURIComponent(page.slug)}">${escapeHtml(page.title)}</a>
-              <span>${escapeHtml(metaBits.join(" • "))}</span>
+              <a class="dashboard-recent-row" href="/wiki/${encodeURIComponent(page.slug)}">
+                <span class="dashboard-recent-title">${escapeHtml(page.title)}</span>
+                <span class="dashboard-recent-meta">
+                  <span class="meta-badge">${escapeHtml(page.categoryName)}</span>
+                  <span>${escapeHtml(metaBits.join(" • "))}</span>
+                </span>
+              </a>
             </li>
           `;
         })
@@ -927,9 +931,9 @@ const renderTrendingTopics = (
               <span class="dashboard-trending-rank">${index + 1}</span>
               <a href="/wiki/${encodeURIComponent(topic.slug)}">${escapeHtml(topic.title)}</a>
               <span class="dashboard-trending-count">${topic.views} Aufrufe</span>
-              <span class="dashboard-trending-meta">${escapeHtml(topic.categoryName)} • zuletzt ${escapeHtml(
+              <span class="dashboard-trending-meta"><span class="meta-badge">${escapeHtml(topic.categoryName)}</span> <span>zuletzt ${escapeHtml(
                 formatDate(topic.lastViewedAt)
-              )}</span>
+              )}</span></span>
             </li>
           `
         )
@@ -1436,8 +1440,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                 data-home-search-toggle
                 aria-controls="home-search-advanced"
                 aria-expanded="false"
-                aria-label="Erweiterte Suche aufklappen"
-              >+</button>
+                aria-label="Filter anzeigen"
+              >
+                <span class="dashboard-search-toggle-icon is-plus" data-toggle-plus aria-hidden="true">+</span>
+                <span class="dashboard-search-toggle-icon is-clear" data-toggle-clear aria-hidden="true">×</span>
+              </button>
               <div class="search-box dashboard-search-box" data-search-suggest>
                 <label class="sr-only" for="dashboard-main-search">Wiki durchsuchen</label>
                 <input
@@ -1445,12 +1452,15 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                   type="search"
                   name="q"
                   value="${escapeHtml(searchQuery)}"
-                  placeholder="Suche in Artikeln, Tags, Kategorien ..."
+                  placeholder="Suche in Artikeln, Tags und Kategorien…"
                   autocomplete="off"
                 />
                 <div class="search-suggest" hidden></div>
               </div>
-              <button type="submit" class="dashboard-search-go">Suche</button>
+              <button type="submit" class="dashboard-search-go" aria-label="Suchen">
+                <span class="dashboard-search-go-label">Suchen</span>
+                <span class="dashboard-search-go-icon" aria-hidden="true">⌕</span>
+              </button>
             </div>
             <div class="dashboard-search-preview" data-home-search-preview aria-live="polite">
               <span class="muted-note small">Keine zusätzlichen Filter aktiv.</span>
@@ -2211,10 +2221,6 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        hideHeader: true,
-        hideFooter: true,
-        hideHeaderSearch: true,
-        mainClassName: "editor-stage",
         error: readSingle(query.error),
         scripts: ["/wiki-ui.js?v=30"]
       })
@@ -2532,10 +2538,6 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         body,
         user: request.currentUser,
         csrfToken: request.csrfToken,
-        hideHeader: true,
-        hideFooter: true,
-        hideHeaderSearch: true,
-        mainClassName: "editor-stage",
         error: readSingle(query.error),
         scripts: ["/wiki-ui.js?v=30"]
       })
@@ -3642,6 +3644,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
         : q.length > 0
           ? "Bitte mindestens 2 Zeichen eingeben oder einen Filter ergänzen."
           : "Bitte Suchbegriff eingeben oder Filter auswählen.";
+    const showHeadline = paged.slice.length > 0;
 
     const buildFilterRemovalUrl = (key: string): string => {
       const params = new URLSearchParams(baseParams);
@@ -3680,8 +3683,11 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
               data-home-search-toggle
               aria-controls="search-page-advanced"
               aria-expanded="false"
-              aria-label="Erweiterte Filter aufklappen"
-            >+</button>
+              aria-label="Filter anzeigen"
+            >
+              <span class="dashboard-search-toggle-icon is-plus" data-toggle-plus aria-hidden="true">+</span>
+              <span class="dashboard-search-toggle-icon is-clear" data-toggle-clear aria-hidden="true">×</span>
+            </button>
             <div class="search-box dashboard-search-box" data-search-suggest>
               <label class="sr-only" for="search-main-q">Suchbegriff</label>
               <input
@@ -3689,12 +3695,16 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
                 type="search"
                 name="q"
                 value="${escapeHtml(q)}"
-                placeholder="Suche in Artikeln, Tags, Autoren ..."
+                placeholder="Suche in Artikeln, Tags und Kategorien…"
                 autocomplete="off"
+                autofocus
               />
               <div class="search-suggest" hidden></div>
             </div>
-            <button type="submit" class="dashboard-search-go">Suchen</button>
+            <button type="submit" class="dashboard-search-go" aria-label="Suchen">
+              <span class="dashboard-search-go-label">Suchen</span>
+              <span class="dashboard-search-go-icon" aria-hidden="true">⌕</span>
+            </button>
           </div>
           <div class="dashboard-search-preview" data-home-search-preview aria-live="polite">
             <span class="muted-note small">Keine zusätzlichen Filter aktiv.</span>
@@ -3745,7 +3755,7 @@ export const registerWikiRoutes = async (app: FastifyInstance): Promise<void> =>
           </section>
         </form>
         ${activeFilterBadges ? `<div class="search-active-filters">${activeFilterBadges}</div>` : ""}
-        <p>${headline}</p>
+        ${showHeadline ? `<p>${headline}</p>` : ""}
         ${renderSearchResultList(paged.slice, {
           query: q,
           activeTag,

@@ -9,7 +9,7 @@ import { ensureDir, removeFile, safeResolve } from "../lib/fileStore.js";
 import { escapeHtml, renderLayout } from "../lib/render.js";
 import { getPublicReadEnabled } from "../lib/runtimeSettingsStore.js";
 import { listPages } from "../lib/wikiStore.js";
-import { renderAdminHeader } from "./adminRoutes.js";
+import { renderAdminPage } from "./adminRoutes.js";
 
 const ROBOTS_MAX_BYTES = 32 * 1024;
 
@@ -206,30 +206,30 @@ export const registerSeoRoutes = async (app: FastifyInstance): Promise<void> => 
     const query = asRecord(request.query);
     const publicBaseUrl = resolvePublicBaseUrl(request);
     const current = (await loadCustomRobotsTxt()) ?? getDefaultRobotsTxt(publicBaseUrl);
-    const body = `
-      ${renderAdminHeader({
-        title: "SEO / robots.txt",
-        description: "Bearbeite die robots.txt für Suchmaschinen. Die Sitemap-Zeile wird automatisch gesetzt.",
-        active: "seo"
-      })}
-      <section class="stack">
-        <form method="post" action="/admin/seo/robots" class="stack">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label for="robots-content">robots.txt Inhalt</label>
-          <textarea id="robots-content" name="content" rows="24" maxlength="${ROBOTS_MAX_BYTES}" spellcheck="false">${escapeHtml(
-            normalizeLineEndings(current)
-          )}</textarea>
-          <p class="muted-note">Hinweis: <code>Sitemap: ${escapeHtml(publicBaseUrl)}/sitemap.xml</code> wird beim Speichern und Ausliefern erzwungen.</p>
-          <div class="action-row">
-            <button type="submit">Speichern</button>
-          </div>
-        </form>
-        <form method="post" action="/admin/seo/robots/reset" class="action-row">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <button type="submit" class="secondary" onclick="return confirm('Custom robots.txt wirklich zurücksetzen?')">Auf Default zurücksetzen</button>
-        </form>
-      </section>
-    `;
+    const body = renderAdminPage({
+      title: "SEO / robots.txt",
+      description: "Bearbeite die robots.txt für Suchmaschinen. Die Sitemap-Zeile wird automatisch gesetzt.",
+      active: "seo",
+      content: `
+        <section class="content-wrap">
+          <form method="post" action="/admin/seo/robots" class="stack">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label for="robots-content">robots.txt Inhalt</label>
+            <textarea id="robots-content" name="content" rows="24" maxlength="${ROBOTS_MAX_BYTES}" spellcheck="false">${escapeHtml(
+              normalizeLineEndings(current)
+            )}</textarea>
+            <p class="muted-note">Hinweis: <code>Sitemap: ${escapeHtml(publicBaseUrl)}/sitemap.xml</code> wird beim Speichern und Ausliefern erzwungen.</p>
+            <div class="action-row">
+              <button type="submit">Speichern</button>
+            </div>
+          </form>
+          <form method="post" action="/admin/seo/robots/reset" class="action-row">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <button type="submit" class="secondary" onclick="return confirm('Custom robots.txt wirklich zurücksetzen?')">Auf Default zurücksetzen</button>
+          </form>
+        </section>
+      `
+    });
 
     return reply.type("text/html").send(
       renderLayout({

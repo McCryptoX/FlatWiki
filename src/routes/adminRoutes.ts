@@ -306,7 +306,7 @@ const renderMediaTable = (
 
   return `
     <div class="table-wrap">
-      <table>
+      <table class="media-table">
         <thead>
           <tr>
             <th>Datei</th>
@@ -1390,7 +1390,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string; mi
 ];
 
 const renderAdminNav = (active: AdminNavKey): string => `
-  <nav class="action-row admin-nav" aria-label="Admin Navigation">
+  <nav class="admin-nav" aria-label="Admin Navigation">
     ${ADMIN_NAV_ITEMS.filter((item) => {
       if (!item.minMode) return true;
       return getUiMode() === "advanced";
@@ -1398,7 +1398,7 @@ const renderAdminNav = (active: AdminNavKey): string => `
       .map((item) => {
       const activeClass = item.key === active ? " is-active-nav" : "";
       const ariaCurrent = item.key === active ? ' aria-current="page"' : "";
-      return `<a class="button secondary${activeClass}" href="${item.href}"${ariaCurrent}>${item.label}</a>`;
+      return `<a class="admin-subnav-link${activeClass}" href="${item.href}"${ariaCurrent}>${item.label}</a>`;
     })
       .join("")}
   </nav>
@@ -1407,16 +1407,39 @@ const renderAdminNav = (active: AdminNavKey): string => `
 export const renderAdminHeader = (input: {
   title: string;
   description: string;
-  active: AdminNavKey;
+  active?: AdminNavKey;
   actions?: string;
 }): string => `
-  <section class="page-header under-title">
-    <div>
+  <section class="page-header under-title admin-page-header">
+    <div class="admin-page-header-copy">
       <h1>${input.title}</h1>
       <p>${input.description}</p>
     </div>
-    ${renderAdminNav(input.active)}
     ${input.actions ? `<div class="action-row admin-page-actions">${input.actions}</div>` : ""}
+  </section>
+`;
+
+export const renderAdminPage = (input: {
+  title: string;
+  description: string;
+  active: AdminNavKey;
+  actions?: string;
+  content: string;
+}): string => `
+  <section class="admin-shell">
+    <aside class="admin-shell-nav">
+      ${renderAdminNav(input.active)}
+    </aside>
+    <section class="admin-shell-main stack">
+      ${renderAdminHeader({
+        title: input.title,
+        description: input.description,
+        ...(input.actions ? { actions: input.actions } : {})
+      })}
+      <section class="admin-shell-content stack">
+        ${input.content}
+      </section>
+    </section>
   </section>
 `;
 
@@ -1425,15 +1448,13 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const users = await listUsers();
     const query = asRecord(request.query);
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Benutzerverwaltung",
-        description: "Konten datenschutzfreundlich verwalten (minimal gespeicherte Stammdaten).",
-        active: "users",
-        actions: '<a class="button" href="/admin/users/new">Neuen Benutzer anlegen</a>'
-      })}
-      ${renderUsersTable(request.csrfToken ?? "", request.currentUser?.id ?? "", users)}
-    `;
+    const body = renderAdminPage({
+      title: "Benutzerverwaltung",
+      description: "Konten datenschutzfreundlich verwalten (minimal gespeicherte Stammdaten).",
+      active: "users",
+      actions: '<a class="button" href="/admin/users/new">Neuen Benutzer anlegen</a>',
+      content: renderUsersTable(request.csrfToken ?? "", request.currentUser?.id ?? "", users)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -1453,20 +1474,18 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const [runtimeSettings, toolingStatus] = await Promise.all([getRuntimeSettings(), getUploadDerivativeToolingStatus()]);
     const currentUiMode = getUiMode();
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Bedienmodus",
-        description: "Wähle, wie umfangreich die Admin-Oberfläche angezeigt wird.",
-        active: "ui"
-      })}
-      ${renderUiModeManagement(
+    const body = renderAdminPage({
+      title: "Bedienmodus",
+      description: "Wähle, wie umfangreich die Admin-Oberfläche angezeigt wird.",
+      active: "ui",
+      content: renderUiModeManagement(
         request.csrfToken ?? "",
         currentUiMode,
         runtimeSettings.publicRead,
         runtimeSettings.uploadDerivativesEnabled,
         toolingStatus
-      )}
-    `;
+      )
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -1608,13 +1627,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const smtp = await getSmtpSettings();
 
-    const body = `
-      ${renderAdminHeader({
-        title: "E-Mail",
-        description: "SMTP-Konfiguration für Benachrichtigungen.",
-        active: "mail"
-      })}
-      <section class="content-wrap stack">
+    const body = renderAdminPage({
+      title: "E-Mail",
+      description: "SMTP-Konfiguration für Benachrichtigungen.",
+      active: "mail",
+      content: `
+      <section class="stack">
         <div class="admin-index-panel stack">
           <h2>SMTP</h2>
           <p class="muted-note">
@@ -1671,7 +1689,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           </form>
         </div>
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -1858,13 +1877,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       .map(([slug, count]) => `<option value="${escapeHtml(slug)}" ${selectedSlug === slug ? "selected" : ""}>${escapeHtml(slug)} (${count})</option>`)
       .join("");
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Kommentare",
-        description: "Moderation, Freigabe und Aufräumen von Kommentaren.",
-        active: "comments"
-      })}
-      <section class="content-wrap stack large">
+    const body = renderAdminPage({
+      title: "Kommentare",
+      description: "Moderation, Freigabe und Aufräumen von Kommentaren.",
+      active: "comments",
+      content: `
+      <section class="stack large">
         <div class="admin-index-panel stack">
           <h2>Moderationseinstellungen</h2>
           <p class="muted-note">Steuert, wann neue Kommentare sofort sichtbar sind und wann eine Freigabe nötig ist.</p>
@@ -2021,7 +2039,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           </form>
         </div>
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -2269,62 +2288,72 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const orphanCount = report.files.filter((file) => file.referencedBy.length === 0).length;
     const missingDerivativeOriginalCount = originalEntries.filter((entry) => entry.convertible && entry.missingDerivatives > 0).length;
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Uploads & Bilder",
-        description: "Upload-Dateien prüfen, Referenzen nachvollziehen und unbenutzte Bilder entfernen.",
-        active: "media",
-        actions: `
+    const body = renderAdminPage({
+      title: "Uploads & Bilder",
+      description: "Upload-Dateien prüfen, Referenzen nachvollziehen und unbenutzte Bilder entfernen.",
+      active: "media",
+      actions: `
           <form method="post" action="/admin/media/cleanup" onsubmit="return confirm('Alle ungenutzten Bilddateien wirklich löschen?')">
             <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-            <button type="submit">Verwaiste Bilder löschen</button>
+            <button type="submit" class="danger">Verwaiste Bilder löschen</button>
           </form>
           <form method="post" action="/admin/media/derivatives/backfill">
             <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
             <input type="hidden" name="dryRun" value="0" />
             <input type="hidden" name="limit" value="500" />
             <input type="hidden" name="concurrency" value="2" />
-            <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Bestehende Bilder konvertieren</button>
+            <button type="submit" class="secondary" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Bestehende Bilder konvertieren</button>
           </form>
-        `
-      })}
-      <section class="content-wrap">
-        <p>
-          ${originalEntries.length} Originalbild(er), ${report.files.length} Upload-Datei(en), ${escapeHtml(formatFileSize(report.totalSizeBytes))} gesamt,
-          ${orphanCount} ungenutzt, ${missingDerivativeOriginalCount} mit fehlenden Derivaten.
-        </p>
-        <p class="muted-note">
-          Konverter-Status: AVIF (${toolingStatus.avifenc.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.avifenc.command)}</code>),
-          WEBP (${toolingStatus.cwebp.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.cwebp.command)}</code>)
-        </p>
-        <form method="get" action="/admin/media" class="action-row">
-          <label class="checkline">
-            <input type="checkbox" name="missingOnly" value="1" ${onlyMissingDerivatives ? "checked" : ""} />
-            <span>Nur Bilder mit fehlenden AVIF/WEBP-Derivaten anzeigen</span>
-          </label>
-          <button type="submit" class="secondary tiny">Filter anwenden</button>
-        </form>
-        <form method="post" action="/admin/media/derivatives/backfill" class="action-row">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Max. Bilder
-            <input type="number" name="limit" min="1" max="10000" value="500" />
-          </label>
-          <label>Gleichzeitig
-            <input type="number" name="concurrency" min="1" max="8" value="2" />
-          </label>
-          <label>Nur seit Datum (optional)
-            <input type="date" name="since" />
-          </label>
-          <label class="checkline">
-            <input type="checkbox" name="dryRun" value="1" />
-            <span>Testlauf (ohne Änderungen)</span>
-          </label>
-          <button type="submit" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Konvertierung starten</button>
-        </form>
-        ${renderMediaTable(request.csrfToken ?? "", tableEntries, { onlyMissingDerivatives })}
+          <button type="submit" form="media-backfill-form" ${toolingStatus.avifenc.available && toolingStatus.cwebp.available ? "" : "disabled"}>Konvertierung starten</button>
+        `,
+      content: `
+      <section class="stack">
+        <div class="admin-index-panel stack">
+          <p>
+            ${originalEntries.length} Originalbild(er), ${report.files.length} Upload-Datei(en), ${escapeHtml(formatFileSize(report.totalSizeBytes))} gesamt,
+            ${orphanCount} ungenutzt, ${missingDerivativeOriginalCount} mit fehlenden Derivaten.
+          </p>
+          <p class="muted-note">
+            Konverter-Status: AVIF (${toolingStatus.avifenc.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.avifenc.command)}</code>),
+            WEBP (${toolingStatus.cwebp.available ? "OK" : "Fehlt"}: <code>${escapeHtml(toolingStatus.cwebp.command)}</code>)
+          </p>
+        </div>
+        <div class="admin-index-panel stack media-filter-panel">
+          <h2>Filter & Konvertierung</h2>
+          <form method="get" action="/admin/media" class="action-row media-filter-row">
+            <label class="checkline">
+              <input type="checkbox" name="missingOnly" value="1" ${onlyMissingDerivatives ? "checked" : ""} />
+              <span>Nur Bilder mit fehlenden AVIF/WEBP-Derivaten anzeigen</span>
+            </label>
+            <button type="submit" class="secondary tiny">Filter anwenden</button>
+          </form>
+          <form method="post" action="/admin/media/derivatives/backfill" id="media-backfill-form" class="action-row media-backfill-row">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Max. Bilder
+              <input type="number" name="limit" min="1" max="10000" value="500" />
+            </label>
+            <label>Gleichzeitig
+              <input type="number" name="concurrency" min="1" max="8" value="2" />
+            </label>
+            <label>Nur seit Datum (optional)
+              <input type="date" name="since" />
+            </label>
+            <label class="checkline">
+              <input type="checkbox" name="dryRun" value="1" />
+              <span>Testlauf (ohne Änderungen)</span>
+            </label>
+          </form>
+        </div>
+        <section class="admin-index-panel media-table-card">
+          <div class="table-card-head">
+            <h2>Upload-Dateien</h2>
+          </div>
+          ${renderMediaTable(request.csrfToken ?? "", tableEntries, { onlyMissingDerivatives })}
+        </section>
         ${renderMissingMediaReferences(report)}
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -2481,13 +2510,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const selectedCategoryId = readSingle(query.categoryId) || defaultCategory.id;
     const securityProfileValue = readSingle(query.securityProfile).trim().toLowerCase() === "confidential" ? "confidential" : "standard";
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Wikitext-Import",
-        description: "MediaWiki/Wikitext in Markdown konvertieren und als FlatWiki-Artikel speichern.",
-        active: "import"
-      })}
-      <section class="content-wrap stack">
+    const body = renderAdminPage({
+      title: "Wikitext-Import",
+      description: "MediaWiki/Wikitext in Markdown konvertieren und als FlatWiki-Artikel speichern.",
+      active: "import",
+      content: `
+      <section class="stack">
         <p class="muted-note">
           Unterstützt unter anderem: Überschriften, Listen, Tabellen, externe Links, interne Wiki-Links, Datei/Bild-Links und
           <code>&lt;syntaxhighlight&gt;</code>-Blöcke.
@@ -2535,7 +2563,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
           </div>
         </form>
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -2680,13 +2709,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       pageCountByCategory.set(page.categoryId, (pageCountByCategory.get(page.categoryId) ?? 0) + 1);
     }
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Kategorien",
-        description: "Kategorien für Artikel verwalten.",
-        active: "categories"
-      })}
-      <section class="content-wrap stack">
+    const body = renderAdminPage({
+      title: "Kategorien",
+      description: "Kategorien für Artikel verwalten.",
+      active: "categories",
+      content: `
+      <section class="stack">
         <form method="post" action="/admin/categories/new" class="action-row">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
           <input type="text" name="name" placeholder="Neue Kategorie" minlength="2" maxlength="80" required />
@@ -2694,7 +2722,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         </form>
         ${renderCategoriesTable(request.csrfToken ?? "", categories, pageCountByCategory)}
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -2755,13 +2784,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const templates = await listTemplates({ includeDisabled: true });
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Vorlagen",
-        description: "Inhaltstypen für den Seiten-Assistenten aktivieren, sortieren und anpassen.",
-        active: "templates"
-      })}
-      <section class="content-wrap stack">
+    const body = renderAdminPage({
+      title: "Vorlagen",
+      description: "Inhaltstypen für den Seiten-Assistenten aktivieren, sortieren und anpassen.",
+      active: "templates",
+      content: `
+      <section class="stack">
         <form method="post" action="/admin/templates/new" class="stack">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
           <h2>Neue Vorlage anlegen</h2>
@@ -2804,7 +2832,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         <p class="muted-note">Nur aktive Vorlagen werden im Assistenten bei "Neue Seite" angezeigt.</p>
         ${renderTemplateCards(request.csrfToken ?? "", templates)}
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -2930,13 +2959,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
       }
     }
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Gruppen",
-        description: "Benutzergruppen für Artikel-Freigaben verwalten.",
-        active: "groups"
-      })}
-      <section class="content-wrap stack">
+    const body = renderAdminPage({
+      title: "Gruppen",
+      description: "Benutzergruppen für Artikel-Freigaben verwalten.",
+      active: "groups",
+      content: `
+      <section class="stack">
         <form method="post" action="/admin/groups/new" class="stack">
           <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
           <label>Name
@@ -2951,7 +2979,8 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
         </form>
         ${renderGroupsTable(request.csrfToken ?? "", groups, pageCountByGroup)}
       </section>
-    `;
+    `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3131,14 +3160,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const report = await getVersionStoreReport(50);
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Versionshistorie",
-        description: "Aufbewahrung und Kompression der Artikel-Historie zentral verwalten.",
-        active: "versions"
-      })}
-      ${renderVersionManagement(request.csrfToken ?? "", report, query)}
-    `;
+    const body = renderAdminPage({
+      title: "Versionshistorie",
+      description: "Aufbewahrung und Kompression der Artikel-Historie zentral verwalten.",
+      active: "versions",
+      content: renderVersionManagement(request.csrfToken ?? "", report, query)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3212,14 +3239,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const preparedRestore = await getPreparedRestoreInfo(request.currentUser?.id);
     const hasBackupKey = Boolean((process.env.BACKUP_ENCRYPTION_KEY ?? "").trim());
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Backups",
-        description: "Verschlüsselte Datensicherungen erstellen und verwalten.",
-        active: "backups"
-      })}
-      ${renderBackupManagement(request.csrfToken ?? "", backupStatus, restoreStatus, automationStatus, preparedRestore, files, hasBackupKey)}
-    `;
+    const body = renderAdminPage({
+      title: "Backups",
+      description: "Verschlüsselte Datensicherungen erstellen und verwalten.",
+      active: "backups",
+      content: renderBackupManagement(request.csrfToken ?? "", backupStatus, restoreStatus, automationStatus, preparedRestore, files, hasBackupKey)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3239,14 +3264,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const inspection = inspectSslStatus(request);
 
-    const body = `
-      ${renderAdminHeader({
-        title: "TLS/SSL-Status",
-        description: "Read-only Prüfung von Domain-, Proxy- und HTTPS-Signalen für externes Hosting.",
-        active: "ssl"
-      })}
-      ${renderSslManagement(inspection)}
-    `;
+    const body = renderAdminPage({
+      title: "TLS/SSL-Status",
+      description: "Read-only Prüfung von Domain-, Proxy- und HTTPS-Signalen für externes Hosting.",
+      active: "ssl",
+      content: renderSslManagement(inspection)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3544,14 +3567,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const query = asRecord(request.query);
     const brokenLinks = await listBrokenInternalLinks();
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Interne Wiki-Links",
-        description: "Prüfung auf defekte [[Seite]]-Verweise im gesamten Wiki.",
-        active: "links"
-      })}
-      ${renderBrokenLinksPanel(brokenLinks)}
-    `;
+    const body = renderAdminPage({
+      title: "Interne Wiki-Links",
+      description: "Prüfung auf defekte [[Seite]]-Verweise im gesamten Wiki.",
+      active: "links",
+      content: renderBrokenLinksPanel(brokenLinks)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3572,14 +3593,12 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
     const status = getSearchIndexBuildStatus();
     const runtimeSettings = await getRuntimeSettings();
 
-    const body = `
-      ${renderAdminHeader({
-        title: "Suchindex",
-        description: "Suchindex-Dateien neu generieren und Fortschritt live verfolgen.",
-        active: "index"
-      })}
-      ${renderIndexManagement(request.csrfToken ?? "", info, status, runtimeSettings.indexBackend)}
-    `;
+    const body = renderAdminPage({
+      title: "Suchindex",
+      description: "Suchindex-Dateien neu generieren und Fortschritt live verfolgen.",
+      active: "index",
+      content: renderIndexManagement(request.csrfToken ?? "", info, status, runtimeSettings.indexBackend)
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3678,27 +3697,33 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
   app.get("/admin/users/new", { preHandler: [requireAdmin] }, async (request, reply) => {
     const query = asRecord(request.query);
 
-    const body = `
-      <section class="content-wrap">
-        <h1>Neuen Benutzer anlegen</h1>
-        <form method="post" action="/admin/users/new" class="stack large">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Benutzername
-            <input type="text" name="username" value="${escapeHtml(query.username ?? "")}" pattern="[a-z0-9._-]{3,32}" required />
-          </label>
-          <label>Anzeigename
-            <input type="text" name="displayName" value="${escapeHtml(query.displayName ?? "")}" required />
-          </label>
-          <label>Rolle
-            <select name="role">${roleOptions(query.role === "admin" ? "admin" : "user")}</select>
-          </label>
-          <label>Initiales Passwort
-            <input type="password" name="password" required minlength="12" autocomplete="new-password" />
-          </label>
-          <button type="submit">Benutzer erstellen</button>
-        </form>
-      </section>
-    `;
+    const body = renderAdminPage({
+      title: "Neuen Benutzer anlegen",
+      description: "Neues Konto inklusive Startrolle und Initialpasswort erstellen.",
+      active: "users",
+      content: `
+        <section class="content-wrap">
+          <form method="post" action="/admin/users/new" class="stack large">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Benutzername
+              <input type="text" name="username" value="${escapeHtml(query.username ?? "")}" pattern="[a-z0-9._-]{3,32}" required />
+            </label>
+            <label>Anzeigename
+              <input type="text" name="displayName" value="${escapeHtml(query.displayName ?? "")}" required />
+            </label>
+            <label>Rolle
+              <select name="role">${roleOptions(query.role === "admin" ? "admin" : "user")}</select>
+            </label>
+            <label>Initiales Passwort
+              <input type="password" name="password" required minlength="12" autocomplete="new-password" />
+            </label>
+            <div class="action-row">
+              <button type="submit">Benutzer erstellen</button>
+            </div>
+          </form>
+        </section>
+      `
+    });
 
     return reply.type("text/html").send(
       renderLayout({
@@ -3769,44 +3794,52 @@ export const registerAdminRoutes = async (app: FastifyInstance): Promise<void> =
 
     const query = asRecord(request.query);
 
-    const body = `
-      <section class="content-wrap">
-        <h1>Benutzer bearbeiten</h1>
-        <form method="post" action="/admin/users/${escapeHtml(user.id)}/edit" class="stack large">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Benutzername
-            <input type="text" value="${escapeHtml(user.username)}" disabled />
-          </label>
-          <label>Anzeigename
-            <input type="text" name="displayName" value="${escapeHtml(query.displayName ?? user.displayName)}" required />
-          </label>
-          <label>E-Mail-Adresse <span class="muted-note small">(optional, für Benachrichtigungen)</span>
-            <input type="email" name="email" value="${escapeHtml(query.email ?? user.email ?? "")}" autocomplete="email" />
-          </label>
-          <label>Rolle
-            <select name="role">${roleOptions((query.role as "admin" | "user") ?? user.role)}</select>
-          </label>
-          <label>Theme
-            <select name="theme">${themeOptions((query.theme as string) ?? user.theme ?? "system")}</select>
-          </label>
-          <label>
-            <input type="checkbox" name="disabled" value="1" ${query.disabled === "1" || (query.disabled === undefined && user.disabled) ? "checked" : ""} />
-            Konto deaktivieren
-          </label>
-          <button type="submit">Speichern</button>
-        </form>
-
-        <hr />
-        <h2>Passwort zurücksetzen</h2>
-        <form method="post" action="/admin/users/${escapeHtml(user.id)}/password" class="stack">
-          <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
-          <label>Neues Passwort
-            <input type="password" name="password" minlength="12" required autocomplete="new-password" />
-          </label>
-          <button type="submit">Passwort setzen</button>
-        </form>
-      </section>
-    `;
+    const body = renderAdminPage({
+      title: "Benutzer bearbeiten",
+      description: "Rolle, Profildaten und Passwort für diesen Account verwalten.",
+      active: "users",
+      content: `
+        <section class="content-wrap">
+          <form method="post" action="/admin/users/${escapeHtml(user.id)}/edit" class="stack large">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Benutzername
+              <input type="text" value="${escapeHtml(user.username)}" disabled />
+            </label>
+            <label>Anzeigename
+              <input type="text" name="displayName" value="${escapeHtml(query.displayName ?? user.displayName)}" required />
+            </label>
+            <label>E-Mail-Adresse <span class="muted-note small">(optional, für Benachrichtigungen)</span>
+              <input type="email" name="email" value="${escapeHtml(query.email ?? user.email ?? "")}" autocomplete="email" />
+            </label>
+            <label>Rolle
+              <select name="role">${roleOptions((query.role as "admin" | "user") ?? user.role)}</select>
+            </label>
+            <label>Theme
+              <select name="theme">${themeOptions((query.theme as string) ?? user.theme ?? "system")}</select>
+            </label>
+            <label>
+              <input type="checkbox" name="disabled" value="1" ${query.disabled === "1" || (query.disabled === undefined && user.disabled) ? "checked" : ""} />
+              Konto deaktivieren
+            </label>
+            <div class="action-row">
+              <button type="submit">Speichern</button>
+            </div>
+          </form>
+        </section>
+        <section class="content-wrap">
+          <h2>Passwort zurücksetzen</h2>
+          <form method="post" action="/admin/users/${escapeHtml(user.id)}/password" class="stack">
+            <input type="hidden" name="_csrf" value="${escapeHtml(request.csrfToken ?? "")}" />
+            <label>Neues Passwort
+              <input type="password" name="password" minlength="12" required autocomplete="new-password" />
+            </label>
+            <div class="action-row">
+              <button type="submit">Passwort setzen</button>
+            </div>
+          </form>
+        </section>
+      `
+    });
 
     return reply.type("text/html").send(
       renderLayout({

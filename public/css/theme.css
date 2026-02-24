@@ -4,25 +4,25 @@
   :root {
     --font-sans: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     --font-mono: "Fira Code", "JetBrains Mono", "SF Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-    --bg: #0b0b14;
-    --surface: rgba(19, 19, 32, 0.94);
+    --bg: #020617;
+    --surface: rgba(15, 23, 42, 0.94);
     --text: #f8f9ff;
     --border: #232336;
-    --bg-alt: #10101c;
-    --surface-1: #131320;
-    --surface-2: #1a1a2c;
-    --surface-3: #232336;
+    --bg-alt: #0b1223;
+    --surface-1: #0f172a;
+    --surface-2: #111c35;
+    --surface-3: #1e293b;
     --ink: #f8f9ff;
-    --muted: #9ea5c0;
-    --text-muted: #a9b0c8;
-    --muted-strong: #c4c9df;
-    --line: #232336;
-    --border-subtle: #2b2b42;
-    --card: rgba(19, 19, 32, 0.94);
+    --muted: #9aa7c2;
+    --text-muted: #a9b7d1;
+    --muted-strong: #d4ddf0;
+    --line: rgba(51, 65, 85, 0.78);
+    --border-subtle: rgba(71, 85, 105, 0.7);
+    --card: rgba(15, 23, 42, 0.94);
     --accent: #6366f1;
     --accent-hover: #818cf8;
     --link: #a5b4fc;
-    --accent-soft: rgba(99, 102, 241, 0.16);
+    --accent-soft: rgba(99, 102, 241, 0.2);
     --accent-muted: #6366f1;
     --danger: #f87171;
     --danger-soft: rgba(239, 68, 68, 0.15);
@@ -31,13 +31,13 @@
     --radius: 14px;
     --radius-sm: 8px;
     --radius-lg: 24px;
-    --shadow: 0 2px 12px rgba(0, 0, 0, 0.32), 0 24px 64px rgba(0, 0, 0, 0.34);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.42), 0 28px 80px rgba(0, 0, 0, 0.4);
-    --glass-bg: rgba(11, 11, 20, 0.8);
+    --shadow: 0 2px 12px rgba(2, 6, 23, 0.35), 0 24px 64px rgba(2, 6, 23, 0.38);
+    --shadow-lg: 0 10px 28px rgba(2, 6, 23, 0.46), 0 30px 80px rgba(2, 6, 23, 0.42);
+    --glass-bg: rgba(2, 6, 23, 0.82);
     --glass-border: rgba(255, 255, 255, 0.06);
-    --code-bg: #0f1020;
+    --code-bg: #111827;
     --code-fg: #cdd6f4;
-    --focus-ring: rgba(99, 102, 241, 0.46);
+    --focus-ring: rgba(99, 102, 241, 0.56);
     --focus: #818cf8;
     --lh-tight: 1.2;
     --lh-normal: 1.4;
@@ -159,7 +159,7 @@
   }
 
   body {
-    min-height: 100vh;
+    min-height: 100svh;
     min-height: 100dvh;
     font-family: var(--font-sans);
     color: var(--text);
@@ -167,7 +167,7 @@
     background-image:
       radial-gradient(52rem 40rem at 100% -10%, rgba(99, 102, 241, 0.12), transparent 70%),
       radial-gradient(46rem 38rem at -10% 0%, rgba(79, 70, 229, 0.1), transparent 72%),
-      linear-gradient(180deg, #0b0b14 0%, #090912 100%);
+      linear-gradient(180deg, color-mix(in srgb, var(--bg) 92%, #000 8%) 0%, color-mix(in srgb, var(--bg) 98%, #000 2%) 100%);
   }
 
   code,

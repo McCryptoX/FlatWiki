@@ -126,7 +126,14 @@
       const toggle = form.querySelector("[data-home-search-toggle]");
       const panel = form.querySelector("[data-home-search-panel]");
       const preview = form.querySelector("[data-home-search-preview]");
-      if (!(toggle instanceof HTMLButtonElement) || !(panel instanceof HTMLElement)) continue;
+      const qInput = form.querySelector('input[name="q"]');
+      if (!(toggle instanceof HTMLButtonElement) || !(panel instanceof HTMLElement) || !(qInput instanceof HTMLInputElement)) continue;
+
+      const updateToggleState = () => {
+        const hasQuery = qInput.value.trim().length > 0;
+        toggle.dataset.mode = hasQuery ? "clear" : "filters";
+        toggle.setAttribute("aria-label", hasQuery ? "Suche leeren" : "Filter anzeigen");
+      };
 
       const setOpen = (open) => {
         panel.hidden = !open;
@@ -139,6 +146,7 @@
       const syncPreview = () => {
         if (!(preview instanceof HTMLElement)) return;
         renderPreview(preview, buildPreviewItems(form));
+        updateToggleState();
       };
       syncPreview();
 
@@ -152,6 +160,12 @@
       }
 
       toggle.addEventListener("click", () => {
+        if (toggle.dataset.mode === "clear") {
+          qInput.value = "";
+          qInput.dispatchEvent(new Event("input", { bubbles: true }));
+          qInput.focus();
+          return;
+        }
         setOpen(panel.hidden);
       });
 
